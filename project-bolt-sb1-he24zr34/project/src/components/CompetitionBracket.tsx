@@ -12,7 +12,7 @@ interface BracketMatch {
   scheduled_for: string;
   round: number;
   leg: number;
-  bracket_position: {
+  bracket_position?: {
     match_number: number;
     round: number;
   };
@@ -27,7 +27,8 @@ interface BracketProps {
 
 export default function CompetitionBracket({ matches, userTeamId, onSubmitResult }: BracketProps) {
   const navigate = useNavigate();
-  const maxRound = Math.max(...matches.map(m => m.round));
+  const bracketMatches = matches.filter(m => m.bracket_position);
+  const maxRound = bracketMatches.length > 0 ? Math.max(...bracketMatches.map(m => m.round)) : 0;
 
   const canSubmitResult = (match: BracketMatch) => {
     if (!userTeamId || !onSubmitResult) return false;
@@ -99,9 +100,9 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
             <div className="space-y-8">
               {Array.from({ length: maxRound }).map((_, roundIndex) => {
                 const round = roundIndex + 1;
-                const roundMatches = matches.filter(m => 
-                  m.round === round && 
-                  m.bracket_position.match_number <= Math.pow(2, maxRound - round)
+                const roundMatches = bracketMatches.filter(m =>
+                  m.round === round &&
+                  m.bracket_position!.match_number <= Math.pow(2, maxRound - round)
                 );
 
                 return (
@@ -123,9 +124,9 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
             <div className="space-y-8">
               {Array.from({ length: maxRound }).map((_, roundIndex) => {
                 const round = roundIndex + 1;
-                const roundMatches = matches.filter(m => 
-                  m.round === round && 
-                  m.bracket_position.match_number > Math.pow(2, maxRound - round)
+                const roundMatches = bracketMatches.filter(m =>
+                  m.round === round &&
+                  m.bracket_position!.match_number > Math.pow(2, maxRound - round)
                 );
 
                 return (
@@ -149,13 +150,13 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
             className="absolute inset-0 pointer-events-none"
             style={{ width: '100%', height: '100%' }}
           >
-            {matches.map(match => {
+            {bracketMatches.map(match => {
               if (match.round === maxRound) return null;
 
-              const x1 = match.bracket_position.match_number <= Math.pow(2, maxRound - match.round) ? '100%' : '0';
-              const x2 = match.bracket_position.match_number <= Math.pow(2, maxRound - match.round) ? '0' : '100%';
-              const y1 = `${(match.bracket_position.match_number - 1) * 100 / Math.pow(2, match.round - 1)}%`;
-              const y2 = `${match.bracket_position.match_number * 100 / Math.pow(2, match.round)}%`;
+              const x1 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '100%' : '0';
+              const x2 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '0' : '100%';
+              const y1 = `${(match.bracket_position!.match_number - 1) * 100 / Math.pow(2, match.round - 1)}%`;
+              const y2 = `${match.bracket_position!.match_number * 100 / Math.pow(2, match.round)}%`;
 
               return (
                 <line
