@@ -74,6 +74,13 @@ export default function CompetitionManagement() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [newMatch, setNewMatch] = useState({
+    date: '',
+    homeTeamId: '',
+    awayTeamId: '',
+    matchDay: 1,
+  });
+  const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [teamSearchTerm, setTeamSearchTerm] = useState('');
   const [createStep, setCreateStep] = useState(1);
@@ -414,6 +421,84 @@ export default function CompetitionManagement() {
     }
   };
 
+  const handleEditMatch = (match: Match) => {
+    setEditingMatch(match);
+    setNewMatch({
+      date: format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm"),
+      homeTeamId: match.home_team_id,
+      awayTeamId: match.away_team_id,
+      matchDay: match.match_day,
+    });
+  };
+
+  const resetMatchForm = () => {
+    setNewMatch({ date: '', homeTeamId: '', awayTeamId: '', matchDay: 1 });
+    setEditingMatch(null);
+  };
+
+  const handleSaveMatch = async () => {
+    if (!selectedCompetition) return;
+
+    if (!newMatch.date || !newMatch.homeTeamId || !newMatch.awayTeamId) {
+      toast.error('Compila tutti i campi');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+
+      if (editingMatch) {
+        const { data, error } = await supabase
+          .from('matches')
+          .update({
+            scheduled_for: newMatch.date,
+            home_team_id: newMatch.homeTeamId,
+            away_team_id: newMatch.awayTeamId,
+            match_day: newMatch.matchDay,
+          })
+          .eq('id', editingMatch.id)
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (error) throw error;
+
+        setMatches(prev =>
+          prev.map(m => (m.id === editingMatch.id ? (data as Match) : m))
+        );
+        toast.success('Partita aggiornata');
+      } else {
+        const { data, error } = await supabase
+          .from('matches')
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: newMatch.homeTeamId,
+            away_team_id: newMatch.awayTeamId,
+            match_day: newMatch.matchDay,
+            scheduled_for: newMatch.date,
+            status: 'scheduled',
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (error) throw error;
+
+        setMatches(prev => [...prev, data as Match]);
+        toast.success('Partita aggiunta');
+      }
+
+      resetMatchForm();
+    } catch (err) {
+      console.error('Error saving match:', err);
+      toast.error('Errore salvataggio');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const renderBracket = () => {
     if (!selectedCompetition) return null;
 
@@ -495,27 +580,37 @@ export default function CompetitionManagement() {
 
   const renderCalendar = () => {
     const matchDays = Array.from(new Set(matches.map(m => m.match_day)));
+    const label = selectedCompetition?.type === 'league' ? 'Giornata' : 'Turno';
 
     return matchDays.map(day => (
       <div key={day} className="mb-6">
-        <h5 className="font-medium mb-2">Giornata {day}</h5>
+        <h5 className="font-medium mb-2">{label} {day}</h5>
         <div className="space-y-2">
           {matches
             .filter(m => m.match_day === day)
             .map(match => (
               <div
                 key={match.id}
-                className="bg-gray-700 p-3 rounded-lg flex items-center justify-between"
+                className="bg-gray-700 p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0"
               >
                 <span>
                   {match.home_team.name} vs {match.away_team.name}
                 </span>
-                <input
-                  type="datetime-local"
-                  value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
-                  onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
-                  className="bg-gray-800 rounded px-2 py-1 text-white"
-                />
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="datetime-local"
+                    value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
+                    onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
+                    className="bg-gray-800 rounded px-2 py-1 text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleEditMatch(match)}
+                    className="text-gray-300 hover:text-white"
+                  >
+                    <Edit2 size={18} />
+                  </button>
+                </div>
               </div>
             ))}
         </div>
@@ -869,6 +964,71 @@ export default function CompetitionManagement() {
             {activeManagementTab === 'calendar' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Calendario</h4>
+                <div className="space-y-4 mb-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <input
+                      type="datetime-local"
+                      value={newMatch.date}
+                      onChange={e => setNewMatch({ ...newMatch, date: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1 text-white"
+                    />
+                    <select
+                      value={newMatch.homeTeamId}
+                      onChange={e => setNewMatch({ ...newMatch, homeTeamId: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1"
+                    >
+                      <option value="">Squadra Casa</option>
+                      {selectedTeams.map(tid => {
+                        const team = allTeams.find(t => t.id === tid);
+                        return team ? (
+                          <option key={team.id} value={team.id} disabled={team.id === newMatch.awayTeamId}>
+                            {team.name}
+                          </option>
+                        ) : null;
+                      })}
+                    </select>
+                    <select
+                      value={newMatch.awayTeamId}
+                      onChange={e => setNewMatch({ ...newMatch, awayTeamId: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1"
+                    >
+                      <option value="">Squadra Trasferta</option>
+                      {selectedTeams.map(tid => {
+                        const team = allTeams.find(t => t.id === tid);
+                        return team ? (
+                          <option key={team.id} value={team.id} disabled={team.id === newMatch.homeTeamId}>
+                            {team.name}
+                          </option>
+                        ) : null;
+                      })}
+                    </select>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newMatch.matchDay}
+                      onChange={e => setNewMatch({ ...newMatch, matchDay: parseInt(e.target.value) })}
+                      className="bg-gray-700 rounded px-2 py-1 text-white"
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    {editingMatch && (
+                      <button
+                        type="button"
+                        onClick={resetMatchForm}
+                        className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg"
+                      >
+                        Annulla
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSaveMatch}
+                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                    >
+                      {editingMatch ? 'Salva' : 'Aggiungi'}
+                    </button>
+                  </div>
+                </div>
                 {renderCalendar()}
               </div>
             )}
