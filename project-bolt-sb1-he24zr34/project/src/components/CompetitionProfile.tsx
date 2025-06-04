@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import MatchResultForm from './MatchResultForm';
 import { useAuth } from '../hooks/useAuth';
 import ChatButton from './ChatButton';
-import CompetitionBracket from './CompetitionBracket';
+import SlotsBracket from './SlotsBracket';
 
 interface Competition {
   id: string;
@@ -66,6 +66,7 @@ export default function CompetitionProfile() {
   const [competition, setCompetition] = useState<Competition | null>(null);
   const [standings, setStandings] = useState<Standing[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [slotTeams, setSlotTeams] = useState<Record<string, { id: string; name: string; logo_url: string | null }>>({});
   const [topScorers, setTopScorers] = useState<Player[]>([]);
   const [topAssists, setTopAssists] = useState<Player[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -118,6 +119,33 @@ export default function CompetitionProfile() {
 
       if (competitionError) throw competitionError;
       setCompetition(competitionData);
+
+      const { data: formatData, error: formatError } = await supabase
+        .from('competition_format')
+        .select('settings')
+        .eq('competition_id', id)
+        .single();
+
+      if (formatError) throw formatError;
+
+      const slots = formatData?.settings?.slots || {};
+      if (Object.keys(slots).length > 0) {
+        const { data: teamsData, error: teamsError } = await supabase
+          .from('teams')
+          .select('id, name, logo_url')
+          .in('id', Object.values(slots));
+
+        if (teamsError) throw teamsError;
+
+        const map: Record<string, { id: string; name: string; logo_url: string | null }> = {};
+        for (const [slotKey, teamId] of Object.entries(slots)) {
+          const team = teamsData?.find(t => t.id === teamId);
+          if (team) map[slotKey] = team;
+        }
+        setSlotTeams(map);
+      } else {
+        setSlotTeams({});
+      }
 
       // Fetch matches with additional fields for cup competitions
       const matchesQuery = supabase
@@ -273,14 +301,7 @@ export default function CompetitionProfile() {
       {/* Content */}
       <div className="bg-gray-800 rounded-lg p-6">
         {activeTab === 'bracket' && competition.type === 'cup' && (
-          <CompetitionBracket
-            matches={matches}
-            userTeamId={userTeamId}
-            onSubmitResult={(match) => {
-              setSelectedMatch(match);
-              setIsResultFormOpen(true);
-            }}
-          />
+          <SlotsBracket slots={slotTeams} matches={matches} />
         )}
 
         {activeTab === 'calendar' && (

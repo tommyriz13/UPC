@@ -1,10 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Plus, Trash2, Settings, Calendar, Users2, ClipboardCheck, Edit2, Search, Shuffle } from 'lucide-react';
+import {
+  Trophy,
+  Plus,
+  Trash2,
+  Settings,
+  Calendar,
+  Users2,
+  ClipboardCheck,
+  Edit2,
+  Search,
+  Shuffle,
+  Save,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
+import CompetitionBracket from './CompetitionBracket';
 
 type CompetitionType = 'league' | 'champions' | 'cup';
 
@@ -31,6 +44,13 @@ interface Match {
   match_day: number;
   home_team_id: string;
   away_team_id: string;
+  approved?: boolean;
+  round?: number;
+  leg?: number;
+  bracket_position?: {
+    match_number: number;
+    round: number;
+  };
 }
 
 type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket';
@@ -41,7 +61,8 @@ const competitionTypes = [
   { value: 'cup', label: 'Coppa' }
 ] as const;
 
-const teamCountOptions = {
+const teamCountOptions: Record<CompetitionType, number[]> = {
+  league: [4, 6, 8, 10, 12, 14, 16, 18, 20],
   champions: [8, 16, 20, 24, 28, 32, 36],
   cup: [8, 16, 32]
 };
@@ -61,6 +82,13 @@ export default function CompetitionManagement() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [newMatch, setNewMatch] = useState({
+    date: '',
+    homeTeamId: '',
+    awayTeamId: '',
+    matchDay: 1,
+  });
+  const [editingMatch, setEditingMatch] = useState<Match | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [teamSearchTerm, setTeamSearchTerm] = useState('');
   const [createStep, setCreateStep] = useState(1);
@@ -74,7 +102,7 @@ export default function CompetitionManagement() {
 
   useEffect(() => {
     if (selectedCompetition?.type === 'cup') {
-      setActiveManagementTab('bracket');
+      setActiveManagementTab('teams');
       fetchBracketTeams();
     }
   }, [selectedCompetition]);
@@ -244,14 +272,21 @@ export default function CompetitionManagement() {
     }
   };
 
-  const handleManageCompetition = async (competition: Competition) => {
+  const handleManageCompetition = async (
+    competition: Competition,
+    e?: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+
     setSelectedCompetition(competition);
+    setIsManageModalOpen(true);
+
     await Promise.all([
       fetchTeams(),
       fetchCompetitionTeams(competition.id),
       fetchMatches(competition.id),
     ]);
-    setIsManageModalOpen(true);
   };
 
   const fetchCompetitionTeams = async (competitionId: string) => {
@@ -272,30 +307,39 @@ export default function CompetitionManagement() {
     try {
       const { data, error } = await supabase
         .from('matches')
-        .select(`
-          id,
+        .select(
+          `id,
           home_team:teams!home_team_id(name),
           away_team:teams!away_team_id(name),
           home_score,
           away_score,
           scheduled_for,
           match_day,
+          approved,
           home_team_id,
-          away_team_id
-        `)
+          away_team_id,
+          competition_matches(round, leg, bracket_position)`
+        )
         .eq('competition_id', competitionId)
         .order('match_day', { ascending: true });
 
       if (error) throw error;
-      setMatches(data || []);
+
+      const transformed = (data || []).map((m: any) => ({
+        ...m,
+        round: m.competition_matches[0]?.round,
+        leg: m.competition_matches[0]?.leg,
+        bracket_position: m.competition_matches[0]?.bracket_position,
+      }));
+      setMatches(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);
     }
   };
 
   const handleTeamToggle = async (teamId: string) => {
-    if (formData.type !== 'league') {
-      // For Cup and Champions League, handle team selection during creation
+    if (!selectedCompetition) {
+      // Selecting teams during creation
       if (selectedTeams.includes(teamId)) {
         setSelectedTeams(prev => prev.filter(id => id !== teamId));
       } else if (selectedTeams.length < formData.teamCount) {
@@ -305,8 +349,6 @@ export default function CompetitionManagement() {
       }
       return;
     }
-
-    if (!selectedCompetition) return;
     
     try {
       if (selectedTeams.includes(teamId)) {
@@ -343,11 +385,7 @@ export default function CompetitionManagement() {
         toast.error('Please enter a competition name');
         return;
       }
-      if (formData.type !== 'league') {
-        setCreateStep(2);
-      } else {
-        handleCreateCompetition(new Event('submit') as any);
-      }
+      setCreateStep(2);
     }
   };
 
@@ -399,6 +437,86 @@ export default function CompetitionManagement() {
       setIsLoading(false);
     }
   };
+
+  const handleEditMatch = (match: Match) => {
+    setEditingMatch(match);
+    setNewMatch({
+      date: format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm"),
+      homeTeamId: match.home_team_id,
+      awayTeamId: match.away_team_id,
+      matchDay: match.match_day,
+    });
+    setActiveManagementTab('calendar');
+  };
+
+  const resetMatchForm = () => {
+    setNewMatch({ date: '', homeTeamId: '', awayTeamId: '', matchDay: 1 });
+    setEditingMatch(null);
+  };
+
+  const handleSaveMatch = async () => {
+    if (!selectedCompetition) return;
+
+    if (!newMatch.date || !newMatch.homeTeamId || !newMatch.awayTeamId) {
+      toast.error('Compila tutti i campi');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+
+      if (editingMatch) {
+        const { data, error } = await supabase
+          .from('matches')
+          .update({
+            scheduled_for: newMatch.date,
+            home_team_id: newMatch.homeTeamId,
+            away_team_id: newMatch.awayTeamId,
+            match_day: newMatch.matchDay,
+          })
+          .eq('id', editingMatch.id)
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (error) throw error;
+
+        setMatches(prev =>
+          prev.map(m => (m.id === editingMatch.id ? (data as Match) : m))
+        );
+        toast.success('Partita aggiornata');
+      } else {
+        const { data, error } = await supabase
+          .from('matches')
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: newMatch.homeTeamId,
+            away_team_id: newMatch.awayTeamId,
+            match_day: newMatch.matchDay,
+            scheduled_for: newMatch.date,
+            status: 'scheduled',
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (error) throw error;
+
+        setMatches(prev => [...prev, data as Match]);
+        toast.success('Partita aggiunta');
+      }
+
+      resetMatchForm();
+    } catch (err) {
+      console.error('Error saving match:', err);
+      toast.error('Errore salvataggio');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
 
   const renderBracket = () => {
     if (!selectedCompetition) return null;
@@ -462,6 +580,63 @@ export default function CompetitionManagement() {
     );
   };
 
+  const handleUpdateMatchDate = async (matchId: string, date: string) => {
+    try {
+      const { error } = await supabase
+        .from('matches')
+        .update({ scheduled_for: date })
+        .eq('id', matchId);
+
+      if (error) throw error;
+
+      setMatches(prev => prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m)));
+      toast.success('Data aggiornata');
+    } catch (err) {
+      console.error('Error updating match date:', err);
+      toast.error('Errore aggiornamento');
+    }
+  };
+
+  const renderCalendar = () => {
+    const matchDays = Array.from(new Set(matches.map(m => m.match_day)));
+    const label = selectedCompetition?.type === 'league' ? 'Giornata' : 'Turno';
+
+    return matchDays.map(day => (
+      <div key={day} className="mb-6">
+        <h5 className="font-medium mb-2">{label} {day}</h5>
+        <div className="space-y-2">
+          {matches
+            .filter(m => m.match_day === day)
+            .map(match => (
+              <div
+                key={match.id}
+                className="bg-gray-700 p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0"
+              >
+                <span>
+                  {match.home_team.name} vs {match.away_team.name}
+                </span>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="datetime-local"
+                    value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
+                    onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
+                    className="bg-gray-800 rounded px-2 py-1 text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleEditMatch(match)}
+                    className="text-gray-300 hover:text-white"
+                  >
+                    <Edit2 size={18} />
+                  </button>
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
+    ));
+  };
+
   const renderCreateStep = () => {
     if (createStep === 1) {
       return (
@@ -497,25 +672,23 @@ export default function CompetitionManagement() {
             </select>
           </div>
 
-          {(formData.type === 'champions' || formData.type === 'cup') && (
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">
-                Numero di Squadre
-              </label>
-              <select
-                value={formData.teamCount}
-                onChange={(e) => setFormData({ ...formData, teamCount: parseInt(e.target.value) })}
-                className="w-full px-3 py-2 bg-gray-700 rounded-lg"
-                required
-              >
-                {teamCountOptions[formData.type as 'champions' | 'cup'].map(count => (
-                  <option key={count} value={count}>
-                    {count} squadre
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Numero di Squadre
+            </label>
+            <select
+              value={formData.teamCount}
+              onChange={(e) => setFormData({ ...formData, teamCount: parseInt(e.target.value) })}
+              className="w-full px-3 py-2 bg-gray-700 rounded-lg"
+              required
+            >
+              {teamCountOptions[formData.type].map(count => (
+                <option key={count} value={count}>
+                  {count} squadre
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -560,6 +733,7 @@ export default function CompetitionManagement() {
                 >
                   <span>{team.name}</span>
                   <button
+                    type="button"
                     onClick={() => handleTeamToggle(team.id)}
                     className={`px-3 py-1 rounded ${
                       selectedTeams.includes(team.id)
@@ -624,13 +798,15 @@ export default function CompetitionManagement() {
             
             <div className="flex space-x-2">
               <button
-                onClick={() => handleManageCompetition(competition)}
+                type="button"
+                onClick={(e) => handleManageCompetition(competition, e)}
                 className="flex-1 bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-lg flex items-center justify-center space-x-2"
               >
                 <Settings size={18} />
                 <span>Gestisci</span>
               </button>
               <button
+                type="button"
                 onClick={() => handleDeleteCompetition(competition.id)}
                 className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg"
               >
@@ -722,25 +898,25 @@ export default function CompetitionManagement() {
                   </button>
                 )}
 
-                {selectedCompetition.type === 'cup' ? (
+                <button
+                  onClick={() => setActiveManagementTab('calendar')}
+                  className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+                    activeManagementTab === 'calendar' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                  }`}
+                >
+                  <Calendar size={20} />
+                  <span>Calendario</span>
+                </button>
+
+                {selectedCompetition.type === 'cup' && (
                   <button
                     onClick={() => setActiveManagementTab('bracket')}
                     className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
                       activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                    }`}
+                    } ml-2`}
                   >
-                    <Trophy size={20} />
+                    <Settings size={20} />
                     <span>Bracket</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setActiveManagementTab('calendar')}
-                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                      activeManagementTab === 'calendar' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                    }`}
-                  >
-                    <Calendar size={20} />
-                    <span>Calendario</span>
                   </button>
                 )}
 
@@ -783,6 +959,7 @@ export default function CompetitionManagement() {
                       >
                         <span>{team.name}</span>
                         <button
+                          type="button"
                           onClick={() => handleTeamToggle(team.id)}
                           className={`px-3 py-1 rounded ${
                             selectedTeams.includes(team.id)
@@ -803,10 +980,75 @@ export default function CompetitionManagement() {
               renderBracket()
             )}
 
-            {activeManagementTab === 'calendar' && selectedCompetition.type !== 'cup' && (
+            {activeManagementTab === 'calendar' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Calendario</h4>
-                {/* Calendar content */}
+                <div className="space-y-4 mb-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <input
+                      type="datetime-local"
+                      value={newMatch.date}
+                      onChange={e => setNewMatch({ ...newMatch, date: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1 text-white"
+                    />
+                    <select
+                      value={newMatch.homeTeamId}
+                      onChange={e => setNewMatch({ ...newMatch, homeTeamId: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1"
+                    >
+                      <option value="">Squadra Casa</option>
+                      {selectedTeams.map(tid => {
+                        const team = allTeams.find(t => t.id === tid);
+                        return team ? (
+                          <option key={team.id} value={team.id} disabled={team.id === newMatch.awayTeamId}>
+                            {team.name}
+                          </option>
+                        ) : null;
+                      })}
+                    </select>
+                    <select
+                      value={newMatch.awayTeamId}
+                      onChange={e => setNewMatch({ ...newMatch, awayTeamId: e.target.value })}
+                      className="bg-gray-700 rounded px-2 py-1"
+                    >
+                      <option value="">Squadra Trasferta</option>
+                      {selectedTeams.map(tid => {
+                        const team = allTeams.find(t => t.id === tid);
+                        return team ? (
+                          <option key={team.id} value={team.id} disabled={team.id === newMatch.homeTeamId}>
+                            {team.name}
+                          </option>
+                        ) : null;
+                      })}
+                    </select>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newMatch.matchDay}
+                      onChange={e => setNewMatch({ ...newMatch, matchDay: parseInt(e.target.value) })}
+                      className="bg-gray-700 rounded px-2 py-1 text-white"
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    {editingMatch && (
+                      <button
+                        type="button"
+                        onClick={resetMatchForm}
+                        className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg"
+                      >
+                        Annulla
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSaveMatch}
+                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                    >
+                      {editingMatch ? 'Salva' : 'Aggiungi'}
+                    </button>
+                  </div>
+                </div>
+                {renderCalendar()}
               </div>
             )}
 

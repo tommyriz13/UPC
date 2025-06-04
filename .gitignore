@@ -1,0 +1,6 @@
+# Node dependencies and build output
+**/node_modules/
+**/dist/
+# Local environment variables
+.env
+.env.local
