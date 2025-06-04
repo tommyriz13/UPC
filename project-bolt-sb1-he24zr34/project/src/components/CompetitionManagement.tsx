@@ -53,7 +53,7 @@ interface Match {
   };
 }
 
-type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket' | 'board';
+type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket';
 
 const competitionTypes = [
   { value: 'league', label: 'Campionato' },
@@ -102,7 +102,7 @@ export default function CompetitionManagement() {
 
   useEffect(() => {
     if (selectedCompetition?.type === 'cup') {
-      setActiveManagementTab('board');
+      setActiveManagementTab('teams');
       fetchBracketTeams();
     }
   }, [selectedCompetition]);
@@ -517,15 +517,6 @@ export default function CompetitionManagement() {
     }
   };
 
-  const renderKnockoutBracket = () => (
-    <CompetitionBracket
-      matches={matches}
-      onEditMatch={(m) => {
-        handleEditMatch(m);
-        setActiveManagementTab('calendar');
-      }}
-    />
-  );
 
   const renderBracket = () => {
     if (!selectedCompetition) return null;
@@ -918,26 +909,15 @@ export default function CompetitionManagement() {
                 </button>
 
                 {selectedCompetition.type === 'cup' && (
-                  <>
-                    <button
-                      onClick={() => setActiveManagementTab('board')}
-                      className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                        activeManagementTab === 'board' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                      }`}
-                    >
-                      <Trophy size={20} />
-                      <span>Tabellone</span>
-                    </button>
-                    <button
-                      onClick={() => setActiveManagementTab('bracket')}
-                      className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                        activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                      } ml-2`}
-                    >
-                      <Settings size={20} />
-                      <span>Bracket</span>
-                    </button>
-                  </>
+                  <button
+                    onClick={() => setActiveManagementTab('bracket')}
+                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+                      activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                    } ml-2`}
+                  >
+                    <Settings size={20} />
+                    <span>Bracket</span>
+                  </button>
                 )}
 
                 <button
@@ -994,10 +974,6 @@ export default function CompetitionManagement() {
                   }
                 </div>
               </div>
-            )}
-
-            {activeManagementTab === 'board' && selectedCompetition.type === 'cup' && (
-              renderKnockoutBracket()
             )}
 
             {activeManagementTab === 'bracket' && selectedCompetition.type === 'cup' && (
