@@ -229,7 +229,9 @@ export default function VerificationGame() {
       }));
 
       for (let round = 1; round < totalRounds; round++) {
-        const roundMatches = current.filter(m => m.round === round && m.leg === 1);
+        const roundMatches = current
+          .filter(m => m.round === round && m.leg === 1)
+          .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
         if (roundMatches.length === 0) continue;
         if (!roundMatches.every(m => m.approved)) continue;
 
@@ -267,6 +269,18 @@ export default function VerificationGame() {
           await supabase.from('competition_matches').insert({
             competition_id: competitionId,
             match_id: newMatch.id,
+            round: round + 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: round + 1 },
+          });
+
+          current.push({
+            id: newMatch.id,
+            home_team_id: winner1,
+            away_team_id: winner2,
+            home_score: null,
+            away_score: null,
+            approved: false,
             round: round + 1,
             leg: 1,
             bracket_position: { match_number: matchNumber, round: round + 1 },

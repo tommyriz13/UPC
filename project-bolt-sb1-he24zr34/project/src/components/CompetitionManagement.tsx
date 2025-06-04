@@ -383,8 +383,11 @@ export default function CompetitionManagement() {
     const totalRounds = Math.log2(selectedTeams.length);
 
     for (let round = 1; round < totalRounds; round++) {
-      const roundMatches = currentMatches.filter(m => m.round === round && m.leg === 1);
+      const roundMatches = currentMatches
+        .filter(m => m.round === round && m.leg === 1)
+        .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
       if (roundMatches.length === 0) continue;
+      if (!roundMatches.every(m => m.approved)) continue;
 
       for (let i = 0; i < roundMatches.length; i += 2) {
         const m1 = roundMatches[i];

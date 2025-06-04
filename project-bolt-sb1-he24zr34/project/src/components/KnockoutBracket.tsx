@@ -33,10 +33,17 @@ export default function KnockoutBracket({ matches }: Props) {
       .sort((a, b) => a.bracket_position!.match_number - b.bracket_position!.match_number)
   );
 
-  const finalMatch = rounds[maxRound - 1]?.[0];
-  const championName = finalMatch && finalMatch.approved && finalMatch.home_score !== null && finalMatch.away_score !== null
-    ? (finalMatch.home_score > finalMatch.away_score ? finalMatch.home_team.name : finalMatch.away_team.name)
-    : null;
+  const finalRoundMatches = rounds[maxRound - 1] || [];
+  const finalMatch = finalRoundMatches.length === 1 ? finalRoundMatches[0] : null;
+  const championName =
+    finalMatch &&
+    finalMatch.approved &&
+    finalMatch.home_score !== null &&
+    finalMatch.away_score !== null
+      ? finalMatch.home_score > finalMatch.away_score
+        ? finalMatch.home_team.name
+        : finalMatch.away_team.name
+      : null;
 
   const labels = ['Fase 1', 'Fase 2', 'Quarti', 'Semifinali', 'Finale'];
 
