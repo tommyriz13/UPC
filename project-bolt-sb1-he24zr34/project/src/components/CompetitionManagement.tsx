@@ -560,6 +560,7 @@ export default function CompetitionManagement() {
                 >
                   <span>{team.name}</span>
                   <button
+                    type="button"
                     onClick={() => handleTeamToggle(team.id)}
                     className={`px-3 py-1 rounded ${
                       selectedTeams.includes(team.id)
@@ -624,6 +625,7 @@ export default function CompetitionManagement() {
             
             <div className="flex space-x-2">
               <button
+                type="button"
                 onClick={() => handleManageCompetition(competition)}
                 className="flex-1 bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-lg flex items-center justify-center space-x-2"
               >
@@ -631,6 +633,7 @@ export default function CompetitionManagement() {
                 <span>Gestisci</span>
               </button>
               <button
+                type="button"
                 onClick={() => handleDeleteCompetition(competition.id)}
                 className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg"
               >
@@ -783,6 +786,7 @@ export default function CompetitionManagement() {
                       >
                         <span>{team.name}</span>
                         <button
+                          type="button"
                           onClick={() => handleTeamToggle(team.id)}
                           className={`px-3 py-1 rounded ${
                             selectedTeams.includes(team.id)
