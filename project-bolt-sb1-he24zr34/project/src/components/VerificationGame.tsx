@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 
 type VerificationStep = 'lineups' | 'results' | 'stats' | 'stream' | 'confirm';
 
+const UNSCHEDULED_DATE = new Date(0).toISOString();
+
 const positionLabels: { [key: string]: string } = {
   'POR': 'Portiere',
   'TD': 'Terzino Destro',
@@ -56,6 +58,7 @@ export default function VerificationGame() {
         .from('matches')
         .select(`
           id,
+          competition_id,
           home_team:teams!home_team_id(name),
           away_team:teams!away_team_id(name),
           scheduled_for,
@@ -182,6 +185,7 @@ export default function VerificationGame() {
 
       if (matchError) throw matchError;
 
+      await advanceKnockoutRounds(match.competition_id);
       toast.success('Match result approved successfully');
       navigate('/admin');
     } catch (error) {
@@ -194,6 +198,84 @@ export default function VerificationGame() {
 
   const handleScoreEdit = (homeScore: number, awayScore: number) => {
     setEditedScores({ homeScore, awayScore });
+  };
+
+  const advanceKnockoutRounds = async (competitionId: string) => {
+    try {
+      const { data: teamData, error: teamError } = await supabase
+        .from('competition_teams')
+        .select('team_id')
+        .eq('competition_id', competitionId);
+
+      if (teamError) throw teamError;
+
+      const teamIds = teamData?.map(t => t.team_id) || [];
+      const totalRounds = Math.log2(teamIds.length);
+
+      const { data, error } = await supabase
+        .from('matches')
+        .select(
+          `id, home_team_id, away_team_id, home_score, away_score, approved, competition_matches(round, leg, bracket_position)`
+        )
+        .eq('competition_id', competitionId);
+
+      if (error) throw error;
+
+      const current: any[] = (data || []).map(m => ({
+        ...m,
+        round: m.competition_matches[0]?.round,
+        leg: m.competition_matches[0]?.leg,
+        bracket_position: m.competition_matches[0]?.bracket_position,
+      }));
+
+      for (let round = 1; round < totalRounds; round++) {
+        const roundMatches = current.filter(m => m.round === round && m.leg === 1);
+        if (roundMatches.length === 0) continue;
+        if (!roundMatches.every(m => m.approved)) continue;
+
+        for (let i = 0; i < roundMatches.length; i += 2) {
+          const m1 = roundMatches[i];
+          const m2 = roundMatches[i + 1];
+          if (!m1 || !m2) continue;
+
+          const matchNumber = Math.floor(i / 2) + 1;
+          const exists = current.find(
+            mm => mm.round === round + 1 &&
+              mm.bracket_position?.match_number === matchNumber &&
+              mm.leg === 1
+          );
+          if (exists) continue;
+
+          const winner1 = m1.home_score > m1.away_score ? m1.home_team_id : m1.away_team_id;
+          const winner2 = m2.home_score > m2.away_score ? m2.home_team_id : m2.away_team_id;
+
+          const { data: newMatch, error: matchError } = await supabase
+            .from('matches')
+            .insert({
+              competition_id: competitionId,
+              home_team_id: winner1,
+              away_team_id: winner2,
+              match_day: round + 1,
+              scheduled_for: UNSCHEDULED_DATE,
+              status: 'scheduled',
+            })
+            .select('id')
+            .single();
+
+          if (matchError || !newMatch) continue;
+
+          await supabase.from('competition_matches').insert({
+            competition_id: competitionId,
+            match_id: newMatch.id,
+            round: round + 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: round + 1 },
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error advancing knockout rounds', err);
+    }
   };
 
   const checkResultConsistency = (match: any) => {
