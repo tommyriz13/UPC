@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import MatchResultForm from './MatchResultForm';
 import { useAuth } from '../hooks/useAuth';
 import ChatButton from './ChatButton';
-import SlotsBracket from './SlotsBracket';
+import KnockoutBracket from './KnockoutBracket';
 
 interface Competition {
   id: string;
@@ -301,7 +301,7 @@ export default function CompetitionProfile() {
       {/* Content */}
       <div className="bg-gray-800 rounded-lg p-6">
         {activeTab === 'bracket' && competition.type === 'cup' && (
-          <SlotsBracket slots={slotTeams} matches={matches} />
+          <KnockoutBracket matches={matches} />
         )}
 
         {activeTab === 'calendar' && (

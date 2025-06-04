@@ -19,6 +19,8 @@ import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
 import CompetitionBracket from './CompetitionBracket';
 
+const UNSCHEDULED_DATE = new Date(0).toISOString();
+
 type CompetitionType = 'league' | 'champions' | 'cup';
 
 interface Competition {
@@ -332,8 +334,66 @@ export default function CompetitionManagement() {
         bracket_position: m.competition_matches[0]?.bracket_position,
       }));
       setMatches(transformed);
+      await advanceWinners(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);
+    }
+  };
+
+  const advanceWinners = async (currentMatches: Match[]) => {
+    if (!selectedCompetition) return;
+
+    const totalRounds = Math.log2(selectedTeams.length);
+
+    for (let round = 1; round < totalRounds; round++) {
+      const roundMatches = currentMatches.filter(m => m.round === round && m.leg === 1);
+      if (roundMatches.length === 0) continue;
+
+      for (let i = 0; i < roundMatches.length; i += 2) {
+        const m1 = roundMatches[i];
+        const m2 = roundMatches[i + 1];
+        if (!m1 || !m2) continue;
+        if (!m1.approved || !m2.approved) continue;
+
+        const winner1 = m1.home_score! > m1.away_score! ? m1.home_team_id : m1.away_team_id;
+        const winner2 = m2.home_score! > m2.away_score! ? m2.home_team_id : m2.away_team_id;
+        const matchNumber = Math.floor(i / 2) + 1;
+
+        const existing = currentMatches.find(
+          mm => mm.round === round + 1 && mm.bracket_position?.match_number === matchNumber && mm.leg === 1
+        );
+
+        if (existing) continue;
+
+        const { data: matchData, error: matchError } = await supabase
+          .from('matches')
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: winner1,
+            away_team_id: winner2,
+            match_day: round + 1,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled'
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (matchError) continue;
+
+        const { error: linkError } = await supabase.from('competition_matches').insert({
+          competition_id: selectedCompetition.id,
+          match_id: (matchData as any).id,
+          round: round + 1,
+          leg: 1,
+          bracket_position: { match_number: matchNumber, round: round + 1 }
+        });
+        if (linkError) continue;
+
+        currentMatches.push({ ...(matchData as Match), round: round + 1, leg: 1, bracket_position: { match_number: matchNumber, round: round + 1 } });
+        setMatches([...currentMatches]);
+      }
     }
   };
 
@@ -428,6 +488,52 @@ export default function CompetitionManagement() {
         .eq('competition_id', selectedCompetition.id);
 
       if (formatError) throw formatError;
+
+      const createdMatches: Match[] = [];
+      const slotEntries = Object.entries(bracketTeams);
+      for (let i = 0; i < slotEntries.length; i += 2) {
+        const homeTeamId = slotEntries[i][1];
+        const awayTeamId = slotEntries[i + 1]?.[1];
+        const matchNumber = i / 2 + 1;
+        if (!homeTeamId || !awayTeamId) continue;
+
+        const existing = matches.find(
+          m => m.round === 1 && m.bracket_position?.match_number === matchNumber
+        );
+        if (existing) continue;
+
+        const { data: matchData, error: matchError } = await supabase
+          .from('matches')
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            match_day: 1,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled'
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (matchError) throw matchError;
+
+        const { error: linkError } = await supabase.from('competition_matches').insert({
+          competition_id: selectedCompetition.id,
+          match_id: (matchData as any).id,
+          round: 1,
+          leg: 1,
+          bracket_position: { match_number: matchNumber, round: 1 }
+        });
+        if (linkError) throw linkError;
+
+        createdMatches.push({ ...(matchData as Match), round: 1, leg: 1, bracket_position: { match_number: matchNumber, round: 1 } });
+      }
+
+      if (createdMatches.length > 0) {
+        setMatches(prev => [...prev, ...createdMatches]);
+      }
 
       toast.success('Bracket saved successfully');
     } catch (error) {
@@ -635,6 +741,9 @@ export default function CompetitionManagement() {
               >
                 <span>
                   {match.home_team.name} vs {match.away_team.name}
+                  {new Date(match.scheduled_for).getTime() === 0 && (
+                    <span className="ml-2 text-yellow-400">⚠️</span>
+                  )}
                 </span>
                 <div className="flex items-center space-x-2">
                   <input
