@@ -454,6 +454,27 @@ export default function CompetitionManagement() {
     setEditingMatch(null);
   };
 
+  const handleDeleteMatch = async (matchId: string) => {
+    try {
+      const { error } = await supabase
+        .from('matches')
+        .delete()
+        .eq('id', matchId);
+
+      if (error) throw error;
+
+      setMatches(prev => prev.filter(m => m.id !== matchId));
+      if (editingMatch?.id === matchId) {
+        resetMatchForm();
+      }
+
+      toast.success('Partita eliminata');
+    } catch (err) {
+      console.error('Error deleting match:', err);
+      toast.error('Errore eliminazione');
+    }
+  };
+
   const handleSaveMatch = async () => {
     if (!selectedCompetition) return;
 
@@ -628,6 +649,13 @@ export default function CompetitionManagement() {
                     className="text-gray-300 hover:text-white"
                   >
                     <Edit2 size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMatch(match.id)}
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <Trash2 size={18} />
                   </button>
                 </div>
               </div>
