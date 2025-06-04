@@ -244,14 +244,21 @@ export default function CompetitionManagement() {
     }
   };
 
-  const handleManageCompetition = async (competition: Competition) => {
+  const handleManageCompetition = async (
+    competition: Competition,
+    e?: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+
     setSelectedCompetition(competition);
+    setIsManageModalOpen(true);
+
     await Promise.all([
       fetchTeams(),
       fetchCompetitionTeams(competition.id),
       fetchMatches(competition.id),
     ]);
-    setIsManageModalOpen(true);
   };
 
   const fetchCompetitionTeams = async (competitionId: string) => {
@@ -626,7 +633,7 @@ export default function CompetitionManagement() {
             <div className="flex space-x-2">
               <button
                 type="button"
-                onClick={() => handleManageCompetition(competition)}
+                onClick={(e) => handleManageCompetition(competition, e)}
                 className="flex-1 bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-lg flex items-center justify-center space-x-2"
               >
                 <Settings size={18} />
