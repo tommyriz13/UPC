@@ -53,7 +53,8 @@ const competitionTypes = [
   { value: 'cup', label: 'Coppa' }
 ] as const;
 
-const teamCountOptions = {
+const teamCountOptions: Record<CompetitionType, number[]> = {
+  league: [4, 6, 8, 10, 12, 14, 16, 18, 20],
   champions: [8, 16, 20, 24, 28, 32, 36],
   cup: [8, 16, 32]
 };
@@ -313,8 +314,8 @@ export default function CompetitionManagement() {
   };
 
   const handleTeamToggle = async (teamId: string) => {
-    if (formData.type !== 'league') {
-      // For Cup and Champions League, handle team selection during creation
+    if (!selectedCompetition) {
+      // Selecting teams during creation
       if (selectedTeams.includes(teamId)) {
         setSelectedTeams(prev => prev.filter(id => id !== teamId));
       } else if (selectedTeams.length < formData.teamCount) {
@@ -324,8 +325,6 @@ export default function CompetitionManagement() {
       }
       return;
     }
-
-    if (!selectedCompetition) return;
     
     try {
       if (selectedTeams.includes(teamId)) {
@@ -362,11 +361,7 @@ export default function CompetitionManagement() {
         toast.error('Please enter a competition name');
         return;
       }
-      if (formData.type !== 'league') {
-        setCreateStep(2);
-      } else {
-        handleCreateCompetition(new Event('submit') as any);
-      }
+      setCreateStep(2);
     }
   };
 
@@ -481,6 +476,53 @@ export default function CompetitionManagement() {
     );
   };
 
+  const handleUpdateMatchDate = async (matchId: string, date: string) => {
+    try {
+      const { error } = await supabase
+        .from('matches')
+        .update({ scheduled_for: date })
+        .eq('id', matchId);
+
+      if (error) throw error;
+
+      setMatches(prev => prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m)));
+      toast.success('Data aggiornata');
+    } catch (err) {
+      console.error('Error updating match date:', err);
+      toast.error('Errore aggiornamento');
+    }
+  };
+
+  const renderCalendar = () => {
+    const matchDays = Array.from(new Set(matches.map(m => m.match_day)));
+
+    return matchDays.map(day => (
+      <div key={day} className="mb-6">
+        <h5 className="font-medium mb-2">Giornata {day}</h5>
+        <div className="space-y-2">
+          {matches
+            .filter(m => m.match_day === day)
+            .map(match => (
+              <div
+                key={match.id}
+                className="bg-gray-700 p-3 rounded-lg flex items-center justify-between"
+              >
+                <span>
+                  {match.home_team.name} vs {match.away_team.name}
+                </span>
+                <input
+                  type="datetime-local"
+                  value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
+                  onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
+                  className="bg-gray-800 rounded px-2 py-1 text-white"
+                />
+              </div>
+            ))}
+        </div>
+      </div>
+    ));
+  };
+
   const renderCreateStep = () => {
     if (createStep === 1) {
       return (
@@ -516,25 +558,23 @@ export default function CompetitionManagement() {
             </select>
           </div>
 
-          {(formData.type === 'champions' || formData.type === 'cup') && (
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">
-                Numero di Squadre
-              </label>
-              <select
-                value={formData.teamCount}
-                onChange={(e) => setFormData({ ...formData, teamCount: parseInt(e.target.value) })}
-                className="w-full px-3 py-2 bg-gray-700 rounded-lg"
-                required
-              >
-                {teamCountOptions[formData.type as 'champions' | 'cup'].map(count => (
-                  <option key={count} value={count}>
-                    {count} squadre
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Numero di Squadre
+            </label>
+            <select
+              value={formData.teamCount}
+              onChange={(e) => setFormData({ ...formData, teamCount: parseInt(e.target.value) })}
+              className="w-full px-3 py-2 bg-gray-700 rounded-lg"
+              required
+            >
+              {teamCountOptions[formData.type].map(count => (
+                <option key={count} value={count}>
+                  {count} squadre
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -744,7 +784,17 @@ export default function CompetitionManagement() {
                   </button>
                 )}
 
-                {selectedCompetition.type === 'cup' ? (
+                <button
+                  onClick={() => setActiveManagementTab('calendar')}
+                  className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+                    activeManagementTab === 'calendar' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                  }`}
+                >
+                  <Calendar size={20} />
+                  <span>Calendario</span>
+                </button>
+
+                {selectedCompetition.type === 'cup' && (
                   <button
                     onClick={() => setActiveManagementTab('bracket')}
                     className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -753,16 +803,6 @@ export default function CompetitionManagement() {
                   >
                     <Trophy size={20} />
                     <span>Bracket</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setActiveManagementTab('calendar')}
-                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                      activeManagementTab === 'calendar' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                    }`}
-                  >
-                    <Calendar size={20} />
-                    <span>Calendario</span>
                   </button>
                 )}
 
@@ -826,10 +866,10 @@ export default function CompetitionManagement() {
               renderBracket()
             )}
 
-            {activeManagementTab === 'calendar' && selectedCompetition.type !== 'cup' && (
+            {activeManagementTab === 'calendar' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Calendario</h4>
-                {/* Calendar content */}
+                {renderCalendar()}
               </div>
             )}
 
