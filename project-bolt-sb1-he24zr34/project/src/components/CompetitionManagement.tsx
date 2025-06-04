@@ -1,5 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Plus, Trash2, Settings, Calendar, Users2, ClipboardCheck, Edit2, Search, Shuffle } from 'lucide-react';
+import {
+  Trophy,
+  Plus,
+  Trash2,
+  Settings,
+  Calendar,
+  Users2,
+  ClipboardCheck,
+  Edit2,
+  Search,
+  Shuffle,
+  Save,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
