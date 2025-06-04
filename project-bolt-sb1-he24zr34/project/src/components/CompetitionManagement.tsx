@@ -11,6 +11,7 @@ import {
   Search,
   Shuffle,
   Save,
+  Check,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -53,6 +54,7 @@ interface Match {
     match_number: number;
     round: number;
   };
+  match_results?: { id: string }[];
 }
 
 type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket';
@@ -84,6 +86,7 @@ export default function CompetitionManagement() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [pendingResults, setPendingResults] = useState<Match[]>([]);
   const [newMatch, setNewMatch] = useState({
     date: '',
     homeTeamId: '',
@@ -108,6 +111,12 @@ export default function CompetitionManagement() {
       fetchBracketTeams();
     }
   }, [selectedCompetition]);
+
+  useEffect(() => {
+    if (activeManagementTab === 'results' && selectedCompetition) {
+      fetchPendingResults(selectedCompetition.id);
+    }
+  }, [activeManagementTab, selectedCompetition]);
 
   const fetchCompetitions = async () => {
     try {
@@ -137,6 +146,33 @@ export default function CompetitionManagement() {
       setAllTeams(data || []);
     } catch (error) {
       console.error('Error fetching teams:', error);
+    }
+  };
+
+  const fetchPendingResults = async (competitionId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('matches')
+        .select(
+          `id,
+          home_team:teams!home_team_id(name),
+          away_team:teams!away_team_id(name),
+          scheduled_for,
+          match_day,
+          approved,
+          match_results(id)`
+        )
+        .eq('competition_id', competitionId)
+        .order('match_day');
+
+      if (error) throw error;
+
+      const pending = (data || []).filter(
+        (m: any) => !m.approved && m.match_results && m.match_results.length >= 2
+      );
+      setPendingResults(pending);
+    } catch (err) {
+      console.error('Error fetching pending results:', err);
     }
   };
 
@@ -288,6 +324,7 @@ export default function CompetitionManagement() {
       fetchTeams(),
       fetchCompetitionTeams(competition.id),
       fetchMatches(competition.id),
+      fetchPendingResults(competition.id),
     ]);
   };
 
@@ -1192,7 +1229,33 @@ export default function CompetitionManagement() {
             {activeManagementTab === 'results' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Risultati</h4>
-                {/* Results content */}
+                {pendingResults.length === 0 ? (
+                  <p className="text-gray-400">Nessun risultato da verificare</p>
+                ) : (
+                  pendingResults.map(match => (
+                    <div
+                      key={match.id}
+                      className="bg-gray-700 rounded-lg p-4 mb-3 flex items-center justify-between"
+                    >
+                      <div>
+                        <p className="font-medium">
+                          {match.home_team.name} vs {match.away_team.name}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          Giornata {match.match_day} -{' '}
+                          {format(new Date(match.scheduled_for), 'dd MMM yyyy HH:mm', { locale: it })}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => navigate(`/verification-game/${match.id}`)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                      >
+                        <Check size={20} />
+                        <span>Verifica</span>
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
