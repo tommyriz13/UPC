@@ -1,6 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy } from 'lucide-react';
+import { Trophy, Edit2 } from 'lucide-react';
+import { format } from 'date-fns';
+import { it } from 'date-fns/locale';
 import ChatButton from './ChatButton';
 
 interface BracketMatch {
@@ -23,9 +25,10 @@ interface BracketProps {
   matches: BracketMatch[];
   userTeamId?: string | null;
   onSubmitResult?: (match: BracketMatch) => void;
+  onEditMatch?: (match: BracketMatch) => void;
 }
 
-export default function CompetitionBracket({ matches, userTeamId, onSubmitResult }: BracketProps) {
+export default function CompetitionBracket({ matches, userTeamId, onSubmitResult, onEditMatch }: BracketProps) {
   const navigate = useNavigate();
   const bracketMatches = matches.filter(m => m.bracket_position);
   const maxRound = bracketMatches.length > 0 ? Math.max(...bracketMatches.map(m => m.round)) : 0;
@@ -42,6 +45,9 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
 
   const renderMatch = (match: BracketMatch) => (
     <div key={match.id} className="bg-gray-800 rounded-lg p-4 w-64">
+      <div className="text-xs text-gray-400 mb-2">
+        {format(new Date(match.scheduled_for), 'dd/MM HH:mm', { locale: it })}
+      </div>
       <div className="space-y-2">
         <button
           onClick={() => navigate(`/team/${match.home_team.id}`)}
@@ -73,14 +79,25 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
           scheduledFor={match.scheduled_for}
           approved={match.approved}
         />
-        {canSubmitResult(match) && (
-          <button
-            onClick={() => onSubmitResult(match)}
-            className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg"
-          >
-            Submit Result
-          </button>
-        )}
+        <div className="flex items-center space-x-2">
+          {onEditMatch && (
+            <button
+              type="button"
+              onClick={() => onEditMatch(match)}
+              className="text-gray-300 hover:text-white"
+            >
+              <Edit2 size={16} />
+            </button>
+          )}
+          {canSubmitResult(match) && onSubmitResult && (
+            <button
+              onClick={() => onSubmitResult(match)}
+              className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg"
+            >
+              Submit Result
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
+import CompetitionBracket from './CompetitionBracket';
 
 type CompetitionType = 'league' | 'champions' | 'cup';
 
@@ -43,9 +44,16 @@ interface Match {
   match_day: number;
   home_team_id: string;
   away_team_id: string;
+  approved?: boolean;
+  round?: number;
+  leg?: number;
+  bracket_position?: {
+    match_number: number;
+    round: number;
+  };
 }
 
-type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket';
+type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket' | 'board';
 
 const competitionTypes = [
   { value: 'league', label: 'Campionato' },
@@ -94,7 +102,7 @@ export default function CompetitionManagement() {
 
   useEffect(() => {
     if (selectedCompetition?.type === 'cup') {
-      setActiveManagementTab('bracket');
+      setActiveManagementTab('board');
       fetchBracketTeams();
     }
   }, [selectedCompetition]);
@@ -299,22 +307,31 @@ export default function CompetitionManagement() {
     try {
       const { data, error } = await supabase
         .from('matches')
-        .select(`
-          id,
+        .select(
+          `id,
           home_team:teams!home_team_id(name),
           away_team:teams!away_team_id(name),
           home_score,
           away_score,
           scheduled_for,
           match_day,
+          approved,
           home_team_id,
-          away_team_id
-        `)
+          away_team_id,
+          competition_matches(round, leg, bracket_position)`
+        )
         .eq('competition_id', competitionId)
         .order('match_day', { ascending: true });
 
       if (error) throw error;
-      setMatches(data || []);
+
+      const transformed = (data || []).map((m: any) => ({
+        ...m,
+        round: m.competition_matches[0]?.round,
+        leg: m.competition_matches[0]?.leg,
+        bracket_position: m.competition_matches[0]?.bracket_position,
+      }));
+      setMatches(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);
     }
@@ -429,6 +446,7 @@ export default function CompetitionManagement() {
       awayTeamId: match.away_team_id,
       matchDay: match.match_day,
     });
+    setActiveManagementTab('calendar');
   };
 
   const resetMatchForm = () => {
@@ -498,6 +516,16 @@ export default function CompetitionManagement() {
       setIsLoading(false);
     }
   };
+
+  const renderKnockoutBracket = () => (
+    <CompetitionBracket
+      matches={matches}
+      onEditMatch={(m) => {
+        handleEditMatch(m);
+        setActiveManagementTab('calendar');
+      }}
+    />
+  );
 
   const renderBracket = () => {
     if (!selectedCompetition) return null;
@@ -890,15 +918,26 @@ export default function CompetitionManagement() {
                 </button>
 
                 {selectedCompetition.type === 'cup' && (
-                  <button
-                    onClick={() => setActiveManagementTab('bracket')}
-                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                      activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                    }`}
-                  >
-                    <Trophy size={20} />
-                    <span>Bracket</span>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => setActiveManagementTab('board')}
+                      className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+                        activeManagementTab === 'board' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                      }`}
+                    >
+                      <Trophy size={20} />
+                      <span>Tabellone</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveManagementTab('bracket')}
+                      className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+                        activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                      } ml-2`}
+                    >
+                      <Settings size={20} />
+                      <span>Bracket</span>
+                    </button>
+                  </>
                 )}
 
                 <button
@@ -955,6 +994,10 @@ export default function CompetitionManagement() {
                   }
                 </div>
               </div>
+            )}
+
+            {activeManagementTab === 'board' && selectedCompetition.type === 'cup' && (
+              renderKnockoutBracket()
             )}
 
             {activeManagementTab === 'bracket' && selectedCompetition.type === 'cup' && (
