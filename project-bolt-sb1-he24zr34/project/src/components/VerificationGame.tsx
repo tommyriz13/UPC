@@ -276,7 +276,7 @@ export default function VerificationGame() {
               competition_id: competitionId,
               home_team_id: w1,
               away_team_id: w2,
-              match_day: round + 1,
+              match_day: round * 2 + 1,
               scheduled_for: UNSCHEDULED_DATE,
               status: 'scheduled',
             })
@@ -312,7 +312,7 @@ export default function VerificationGame() {
                 competition_id: competitionId,
                 home_team_id: w2,
                 away_team_id: w1,
-                match_day: round + 1,
+                match_day: round * 2 + 2,
                 scheduled_for: UNSCHEDULED_DATE,
                 status: 'scheduled',
               })

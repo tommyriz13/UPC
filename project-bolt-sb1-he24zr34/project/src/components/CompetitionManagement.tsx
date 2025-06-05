@@ -433,7 +433,7 @@ export default function CompetitionManagement() {
             competition_id: selectedCompetition.id,
             home_team_id: winner1,
             away_team_id: winner2,
-            match_day: round + 1,
+            match_day: round * 2 + 1,
             scheduled_for: UNSCHEDULED_DATE,
             status: 'scheduled'
           })
@@ -463,7 +463,7 @@ export default function CompetitionManagement() {
               competition_id: selectedCompetition.id,
               home_team_id: winner2,
               away_team_id: winner1,
-              match_day: round + 1,
+              match_day: round * 2 + 2,
               scheduled_for: UNSCHEDULED_DATE,
               status: 'scheduled'
             })
@@ -633,7 +633,7 @@ export default function CompetitionManagement() {
             competition_id: selectedCompetition.id,
             home_team_id: awayTeamId,
             away_team_id: homeTeamId,
-            match_day: 1,
+            match_day: 2,
             scheduled_for: UNSCHEDULED_DATE,
             status: 'scheduled'
           })
