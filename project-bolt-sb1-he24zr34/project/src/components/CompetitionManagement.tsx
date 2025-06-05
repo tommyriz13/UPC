@@ -717,11 +717,13 @@ export default function CompetitionManagement() {
     try {
       setIsLoading(true);
 
+      const iso = new Date(newMatch.date).toISOString();
+
       if (editingMatch) {
         const { data, error } = await supabase
           .from('matches')
           .update({
-            scheduled_for: newMatch.date,
+            scheduled_for: iso,
             home_team_id: newMatch.homeTeamId,
             away_team_id: newMatch.awayTeamId,
             match_day: newMatch.matchDay,
@@ -746,7 +748,7 @@ export default function CompetitionManagement() {
             home_team_id: newMatch.homeTeamId,
             away_team_id: newMatch.awayTeamId,
             match_day: newMatch.matchDay,
-            scheduled_for: newMatch.date,
+            scheduled_for: iso,
             status: 'scheduled',
           })
           .select(
@@ -834,15 +836,16 @@ export default function CompetitionManagement() {
 
   const handleUpdateMatchDate = async (matchId: string, date: string) => {
     try {
+      const iso = new Date(date).toISOString();
       const { error } = await supabase
         .from('matches')
-        .update({ scheduled_for: date })
+        .update({ scheduled_for: iso })
         .eq('id', matchId);
 
       if (error) throw error;
 
       setMatches(prev =>
-        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m))
+        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: iso } : m))
       );
       toast.success('Data aggiornata');
     } catch (err) {

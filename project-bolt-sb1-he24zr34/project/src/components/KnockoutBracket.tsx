@@ -56,12 +56,12 @@ export default function KnockoutBracket({ matches }: Props) {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-row-reverse items-start space-x-reverse space-x-8 overflow-x-auto">
       {rounds.map((roundGroups, idx) => {
         const numbers = Object.keys(roundGroups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
         if (numbers.length === 0) return null;
         return (
-          <div key={idx}>
+          <div key={idx} className="flex flex-col items-center space-y-3">
             <h4 className="font-semibold mb-2">{labels[idx] || `Fase ${idx + 1}`}</h4>
             <div className="space-y-3">
               {numbers.map(num => {
@@ -109,7 +109,7 @@ export default function KnockoutBracket({ matches }: Props) {
         );
       })}
       {championName && (
-        <div className="flex flex-col items-center space-y-2">
+        <div className="flex flex-col items-center space-y-2 ml-4">
           <h4 className="font-semibold">Vincitore</h4>
           <div className="bg-gray-700 rounded-lg p-3">{championName}</div>
           <Trophy size={24} className="text-yellow-500" />
