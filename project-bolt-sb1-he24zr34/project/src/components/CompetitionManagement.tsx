@@ -383,29 +383,51 @@ export default function CompetitionManagement() {
     const totalRounds = Math.log2(selectedTeams.length);
 
     for (let round = 1; round < totalRounds; round++) {
-      const roundMatches = currentMatches
-        .filter(m => m.round === round && m.leg === 1)
+      const matchesInRound = currentMatches
+        .filter(m => m.round === round)
         .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
-      if (roundMatches.length === 0) continue;
-      if (!roundMatches.every(m => m.approved)) continue;
 
-      for (let i = 0; i < roundMatches.length; i += 2) {
-        const m1 = roundMatches[i];
-        const m2 = roundMatches[i + 1];
-        if (!m1 || !m2) continue;
-        if (!m1.approved || !m2.approved) continue;
+      const groups: { [key: number]: Match[] } = {};
+      matchesInRound.forEach(m => {
+        const num = m.bracket_position?.match_number || 0;
+        groups[num] = groups[num] ? [...groups[num], m] : [m];
+      });
 
-        const winner1 = m1.home_score! > m1.away_score! ? m1.home_team_id : m1.away_team_id;
-        const winner2 = m2.home_score! > m2.away_score! ? m2.home_team_id : m2.away_team_id;
+      const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+      if (groupNumbers.length === 0) continue;
+
+      const winners: string[] = [];
+      for (const num of groupNumbers) {
+        const legs = groups[num];
+        if (!legs.every(l => l.approved)) {
+          winners.length = 0;
+          break;
+        }
+
+        const leg1 = legs.find(l => l.leg === 1)!;
+        const leg2 = legs.find(l => l.leg === 2);
+        const homeTotal = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
+        const awayTotal = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
+        const winner = homeTotal >= awayTotal ? leg1.home_team_id : leg1.away_team_id;
+        winners.push(winner);
+      }
+
+      if (winners.length === 0) continue;
+
+      for (let i = 0; i < winners.length; i += 2) {
+        const winner1 = winners[i];
+        const winner2 = winners[i + 1];
+        if (!winner1 || !winner2) continue;
+
         const matchNumber = Math.floor(i / 2) + 1;
 
         const existing = currentMatches.find(
-          mm => mm.round === round + 1 && mm.bracket_position?.match_number === matchNumber && mm.leg === 1
+          m => m.round === round + 1 && m.bracket_position?.match_number === matchNumber && m.leg === 1
         );
-
         if (existing) continue;
 
-        const { data: matchData, error: matchError } = await supabase
+        // create leg 1
+        const { data: legOne, error: legOneError } = await supabase
           .from('matches')
           .insert({
             competition_id: selectedCompetition.id,
@@ -420,18 +442,50 @@ export default function CompetitionManagement() {
           )
           .single();
 
-        if (matchError) continue;
+        if (legOneError) continue;
 
-        const { error: linkError } = await supabase.from('competition_matches').insert({
+        const { error: linkOne } = await supabase.from('competition_matches').insert({
           competition_id: selectedCompetition.id,
-          match_id: (matchData as any).id,
+          match_id: (legOne as any).id,
           round: round + 1,
           leg: 1,
           bracket_position: { match_number: matchNumber, round: round + 1 }
         });
-        if (linkError) continue;
+        if (linkOne) continue;
 
-        currentMatches.push({ ...(matchData as Match), round: round + 1, leg: 1, bracket_position: { match_number: matchNumber, round: round + 1 } });
+        currentMatches.push({ ...(legOne as Match), round: round + 1, leg: 1, bracket_position: { match_number: matchNumber, round: round + 1 } });
+
+        const isFinal = round + 1 === totalRounds;
+        if (!isFinal) {
+          const { data: legTwo, error: legTwoError } = await supabase
+            .from('matches')
+            .insert({
+              competition_id: selectedCompetition.id,
+              home_team_id: winner2,
+              away_team_id: winner1,
+              match_day: round + 1,
+              scheduled_for: UNSCHEDULED_DATE,
+              status: 'scheduled'
+            })
+            .select(
+              `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id`
+            )
+            .single();
+
+          if (!legTwoError) {
+            const { error: linkTwo } = await supabase.from('competition_matches').insert({
+              competition_id: selectedCompetition.id,
+              match_id: (legTwo as any).id,
+              round: round + 1,
+              leg: 2,
+              bracket_position: { match_number: matchNumber, round: round + 1 }
+            });
+            if (!linkTwo) {
+              currentMatches.push({ ...(legTwo as Match), round: round + 1, leg: 2, bracket_position: { match_number: matchNumber, round: round + 1 } });
+            }
+          }
+        }
+
         setMatches([...currentMatches]);
       }
     }
@@ -531,6 +585,7 @@ export default function CompetitionManagement() {
 
       const createdMatches: Match[] = [];
       const slotEntries = Object.entries(bracketTeams);
+
       for (let i = 0; i < slotEntries.length; i += 2) {
         const homeTeamId = slotEntries[i][1];
         const awayTeamId = slotEntries[i + 1]?.[1];
@@ -542,7 +597,8 @@ export default function CompetitionManagement() {
         );
         if (existing) continue;
 
-        const { data: matchData, error: matchError } = await supabase
+        // first leg
+        const { data: firstLeg, error: firstError } = await supabase
           .from('matches')
           .insert({
             competition_id: selectedCompetition.id,
@@ -557,18 +613,47 @@ export default function CompetitionManagement() {
           )
           .single();
 
-        if (matchError) throw matchError;
+        if (firstError) throw firstError;
 
-        const { error: linkError } = await supabase.from('competition_matches').insert({
+        const { error: linkFirst } = await supabase.from('competition_matches').insert({
           competition_id: selectedCompetition.id,
-          match_id: (matchData as any).id,
+          match_id: (firstLeg as any).id,
           round: 1,
           leg: 1,
           bracket_position: { match_number: matchNumber, round: 1 }
         });
-        if (linkError) throw linkError;
+        if (linkFirst) throw linkFirst;
 
-        createdMatches.push({ ...(matchData as Match), round: 1, leg: 1, bracket_position: { match_number: matchNumber, round: 1 } });
+        createdMatches.push({ ...(firstLeg as Match), round: 1, leg: 1, bracket_position: { match_number: matchNumber, round: 1 } });
+
+        // second leg
+        const { data: secondLeg, error: secondError } = await supabase
+          .from('matches')
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: awayTeamId,
+            away_team_id: homeTeamId,
+            match_day: 1,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled'
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id`
+          )
+          .single();
+
+        if (secondError) throw secondError;
+
+        const { error: linkSecond } = await supabase.from('competition_matches').insert({
+          competition_id: selectedCompetition.id,
+          match_id: (secondLeg as any).id,
+          round: 1,
+          leg: 2,
+          bracket_position: { match_number: matchNumber, round: 1 }
+        });
+        if (linkSecond) throw linkSecond;
+
+        createdMatches.push({ ...(secondLeg as Match), round: 1, leg: 2, bracket_position: { match_number: matchNumber, round: 1 } });
       }
 
       if (createdMatches.length > 0) {

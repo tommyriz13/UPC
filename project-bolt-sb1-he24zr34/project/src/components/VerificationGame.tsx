@@ -229,16 +229,38 @@ export default function VerificationGame() {
       }));
 
       for (let round = 1; round < totalRounds; round++) {
-        const roundMatches = current
-          .filter(m => m.round === round && m.leg === 1)
-          .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
-        if (roundMatches.length === 0) continue;
-        if (!roundMatches.every(m => m.approved)) continue;
+        const roundMatches = current.filter(m => m.round === round);
+        const groups: { [key: number]: any[] } = {};
+        roundMatches.forEach(m => {
+          const num = m.bracket_position?.match_number || 0;
+          groups[num] = groups[num] ? [...groups[num], m] : [m];
+        });
 
-        for (let i = 0; i < roundMatches.length; i += 2) {
-          const m1 = roundMatches[i];
-          const m2 = roundMatches[i + 1];
-          if (!m1 || !m2) continue;
+        const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+        if (groupNumbers.length === 0) continue;
+
+        const winners: string[] = [];
+        for (const num of groupNumbers) {
+          const legs = groups[num];
+          if (!legs.every(l => l.approved)) {
+            winners.length = 0;
+            break;
+          }
+
+          const leg1 = legs.find(l => l.leg === 1)!;
+          const leg2 = legs.find(l => l.leg === 2);
+          const total1 = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
+          const total2 = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
+          const winner = total1 >= total2 ? leg1.home_team_id : leg1.away_team_id;
+          winners.push(winner);
+        }
+
+        if (winners.length === 0) continue;
+
+        for (let i = 0; i < winners.length; i += 2) {
+          const w1 = winners[i];
+          const w2 = winners[i + 1];
+          if (!w1 || !w2) continue;
 
           const matchNumber = Math.floor(i / 2) + 1;
           const exists = current.find(
@@ -248,15 +270,12 @@ export default function VerificationGame() {
           );
           if (exists) continue;
 
-          const winner1 = m1.home_score > m1.away_score ? m1.home_team_id : m1.away_team_id;
-          const winner2 = m2.home_score > m2.away_score ? m2.home_team_id : m2.away_team_id;
-
-          const { data: newMatch, error: matchError } = await supabase
+          const { data: firstLeg, error: firstErr } = await supabase
             .from('matches')
             .insert({
               competition_id: competitionId,
-              home_team_id: winner1,
-              away_team_id: winner2,
+              home_team_id: w1,
+              away_team_id: w2,
               match_day: round + 1,
               scheduled_for: UNSCHEDULED_DATE,
               status: 'scheduled',
@@ -264,20 +283,20 @@ export default function VerificationGame() {
             .select('id')
             .single();
 
-          if (matchError || !newMatch) continue;
+          if (firstErr || !firstLeg) continue;
 
           await supabase.from('competition_matches').insert({
             competition_id: competitionId,
-            match_id: newMatch.id,
+            match_id: firstLeg.id,
             round: round + 1,
             leg: 1,
             bracket_position: { match_number: matchNumber, round: round + 1 },
           });
 
           current.push({
-            id: newMatch.id,
-            home_team_id: winner1,
-            away_team_id: winner2,
+            id: firstLeg.id,
+            home_team_id: w1,
+            away_team_id: w2,
             home_score: null,
             away_score: null,
             approved: false,
@@ -285,6 +304,43 @@ export default function VerificationGame() {
             leg: 1,
             bracket_position: { match_number: matchNumber, round: round + 1 },
           });
+
+          if (round + 1 !== totalRounds) {
+            const { data: secondLeg, error: secondErr } = await supabase
+              .from('matches')
+              .insert({
+                competition_id: competitionId,
+                home_team_id: w2,
+                away_team_id: w1,
+                match_day: round + 1,
+                scheduled_for: UNSCHEDULED_DATE,
+                status: 'scheduled',
+              })
+              .select('id')
+              .single();
+
+            if (!secondErr && secondLeg) {
+              await supabase.from('competition_matches').insert({
+                competition_id: competitionId,
+                match_id: secondLeg.id,
+                round: round + 1,
+                leg: 2,
+                bracket_position: { match_number: matchNumber, round: round + 1 },
+              });
+
+              current.push({
+                id: secondLeg.id,
+                home_team_id: w2,
+                away_team_id: w1,
+                home_score: null,
+                away_score: null,
+                approved: false,
+                round: round + 1,
+                leg: 2,
+                bracket_position: { match_number: matchNumber, round: round + 1 },
+              });
+            }
+          }
         }
       }
     } catch (err) {
