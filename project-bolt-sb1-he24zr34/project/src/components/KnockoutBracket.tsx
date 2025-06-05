@@ -86,7 +86,7 @@ export default function KnockoutBracket({ matches }: Props) {
                 return (
                   <div
                     key={num}
-                    className="space-y-1 border border-gray-600 bg-gray-800 rounded-lg p-2"
+                    className="space-y-1 border border-gray-600 bg-gray-800 rounded-lg p-2 w-48"
                   >
                     <div className={`bg-gray-700 rounded-lg p-2 ${homeHighlight}`}>{leg1.home_team.name}</div>
                     <div className="text-center text-sm">

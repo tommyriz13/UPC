@@ -20,7 +20,7 @@ import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
 import CompetitionBracket from './CompetitionBracket';
 
-const UNSCHEDULED_DATE = new Date(0).toISOString();
+const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
 
 type CompetitionType = 'league' | 'champions' | 'cup';
 
@@ -160,7 +160,7 @@ export default function CompetitionManagement() {
           scheduled_for,
           match_day,
           approved,
-          match_results(id)`
+          match_results(id, team_id, teams(name))`
         )
         .eq('competition_id', competitionId)
         .order('match_day');
@@ -168,7 +168,7 @@ export default function CompetitionManagement() {
       if (error) throw error;
 
       const pending = (data || []).filter(
-        (m: any) => !m.approved && m.match_results && m.match_results.length >= 2
+        (m: any) => !m.approved && m.match_results && m.match_results.length > 0
       );
       setPendingResults(pending);
     } catch (err) {
@@ -834,16 +834,15 @@ export default function CompetitionManagement() {
 
   const handleUpdateMatchDate = async (matchId: string, date: string) => {
     try {
-      const iso = new Date(date).toISOString();
       const { error } = await supabase
         .from('matches')
-        .update({ scheduled_for: iso })
+        .update({ scheduled_for: date })
         .eq('id', matchId);
 
       if (error) throw error;
 
       setMatches(prev =>
-        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: iso } : m))
+        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m))
       );
       toast.success('Data aggiornata');
     } catch (err) {
@@ -869,7 +868,7 @@ export default function CompetitionManagement() {
               >
                 <span>
                   {match.home_team.name} vs {match.away_team.name}
-                  {new Date(match.scheduled_for).getTime() === 0 && (
+                  {match.scheduled_for === UNSCHEDULED_DATE && (
                     <span className="ml-2 text-yellow-400">⚠️</span>
                   )}
                   {match.approved && <span className="ml-2 text-green-300">✔️</span>}
@@ -1329,29 +1328,41 @@ export default function CompetitionManagement() {
                 {pendingResults.length === 0 ? (
                   <p className="text-gray-400">Nessun risultato da verificare</p>
                 ) : (
-                  pendingResults.map(match => (
-                    <div
-                      key={match.id}
-                      className="bg-gray-700 rounded-lg p-4 mb-3 flex items-center justify-between"
-                    >
-                      <div>
-                        <p className="font-medium">
-                          {match.home_team.name} vs {match.away_team.name}
-                        </p>
-                        <p className="text-sm text-gray-400">
-                          Giornata {match.match_day} -{' '}
-                          {format(new Date(match.scheduled_for), 'dd MMM yyyy HH:mm', { locale: it })}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => navigate(`/verification-game/${match.id}`)}
-                        className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                  pendingResults.map(match => {
+                    const submittedTeams = match.match_results.map((r: any) => r.teams.name);
+                    const missing = [match.home_team.name, match.away_team.name].filter(n => !submittedTeams.includes(n));
+                    const showVerify = match.match_results.length >= 2;
+                    return (
+                      <div
+                        key={match.id}
+                        className="bg-gray-700 rounded-lg p-4 mb-3 flex items-center justify-between"
                       >
-                        <Check size={20} />
-                        <span>Verifica</span>
-                      </button>
-                    </div>
-                  ))
+                        <div>
+                          <p className="font-medium">
+                            {match.home_team.name} vs {match.away_team.name}
+                          </p>
+                          <p className="text-sm text-gray-400">
+                            Giornata {match.match_day} -{' '}
+                            {format(new Date(match.scheduled_for), 'dd MMM yyyy HH:mm', { locale: it })}
+                          </p>
+                          {!showVerify && (
+                            <p className="text-sm text-yellow-400 mt-1">
+                              Risultato inviato da {submittedTeams.join(', ')}. In attesa di {missing.join(', ')}
+                            </p>
+                          )}
+                        </div>
+                        {showVerify && (
+                          <button
+                            onClick={() => navigate(`/verification-game/${match.id}`)}
+                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                          >
+                            <Check size={20} />
+                            <span>Verifica</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             )}

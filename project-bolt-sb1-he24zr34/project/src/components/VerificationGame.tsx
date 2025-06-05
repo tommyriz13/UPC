@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 
 type VerificationStep = 'lineups' | 'results' | 'stats' | 'stream' | 'confirm';
 
-const UNSCHEDULED_DATE = new Date(0).toISOString();
+const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
 
 const positionLabels: { [key: string]: string } = {
   'POR': 'Portiere',
@@ -45,6 +45,7 @@ export default function VerificationGame() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [playerNames, setPlayerNames] = useState<{ [key: string]: string }>({});
+  const [editedStats, setEditedStats] = useState<{ [key: string]: { goals: number; assists: number } }>({});
 
   useEffect(() => {
     if (matchId) {
@@ -131,6 +132,13 @@ export default function VerificationGame() {
         }
       }
 
+      if (data?.match_player_stats) {
+        const statsMap: { [key: string]: { goals: number; assists: number } } = {};
+        data.match_player_stats.forEach((s: any) => {
+          statsMap[s.id] = { goals: s.goals, assists: s.assists };
+        });
+        setEditedStats(statsMap);
+      }
       setMatch(data);
     } catch (error) {
       console.error('Error fetching match data:', error);
@@ -171,6 +179,14 @@ export default function VerificationGame() {
           .eq('match_id', match.id);
 
         if (approveError) throw approveError;
+      }
+
+      for (const statId of Object.keys(editedStats)) {
+        const { goals, assists } = editedStats[statId];
+        await supabase
+          .from('match_player_stats')
+          .update({ goals, assists })
+          .eq('id', statId);
       }
 
       // Update match status directly
@@ -646,13 +662,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === homeTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }
@@ -676,13 +717,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === awayTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }
