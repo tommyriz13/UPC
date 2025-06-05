@@ -84,7 +84,10 @@ export default function KnockoutBracket({ matches }: Props) {
                 const awayHighlight = allApproved && winnerId === leg1.away_team.id ? 'border-2 border-yellow-500' : '';
 
                 return (
-                  <div key={num} className="space-y-1">
+                  <div
+                    key={num}
+                    className="space-y-1 border border-gray-600 bg-gray-800 rounded-lg p-2"
+                  >
                     <div className={`bg-gray-700 rounded-lg p-2 ${homeHighlight}`}>{leg1.home_team.name}</div>
                     <div className="text-center text-sm">
                       {leg1.home_score !== null && leg1.away_score !== null ? `Andata: ${leg1.home_score} - ${leg1.away_score}` : 'Andata: vs'}

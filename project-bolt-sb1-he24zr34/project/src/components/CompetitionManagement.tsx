@@ -834,14 +834,17 @@ export default function CompetitionManagement() {
 
   const handleUpdateMatchDate = async (matchId: string, date: string) => {
     try {
+      const iso = new Date(date).toISOString();
       const { error } = await supabase
         .from('matches')
-        .update({ scheduled_for: date })
+        .update({ scheduled_for: iso })
         .eq('id', matchId);
 
       if (error) throw error;
 
-      setMatches(prev => prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m)));
+      setMatches(prev =>
+        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: iso } : m))
+      );
       toast.success('Data aggiornata');
     } catch (err) {
       console.error('Error updating match date:', err);
@@ -862,13 +865,14 @@ export default function CompetitionManagement() {
             .map(match => (
               <div
                 key={match.id}
-                className="bg-gray-700 p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0"
+                className={`p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0 ${match.approved ? 'bg-green-700' : 'bg-gray-700'}`}
               >
                 <span>
                   {match.home_team.name} vs {match.away_team.name}
                   {new Date(match.scheduled_for).getTime() === 0 && (
                     <span className="ml-2 text-yellow-400">⚠️</span>
                   )}
+                  {match.approved && <span className="ml-2 text-green-300">✔️</span>}
                 </span>
                 <div className="flex items-center space-x-2">
                   <input
@@ -876,21 +880,26 @@ export default function CompetitionManagement() {
                     value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
                     onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
                     className="bg-gray-800 rounded px-2 py-1 text-white"
+                    disabled={match.approved}
                   />
-                  <button
-                    type="button"
-                    onClick={() => handleEditMatch(match)}
-                    className="text-gray-300 hover:text-white"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteMatch(match.id)}
-                    className="text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  {!match.approved && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleEditMatch(match)}
+                        className="text-gray-300 hover:text-white"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMatch(match.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
