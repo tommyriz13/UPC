@@ -68,12 +68,20 @@ export default function KnockoutBracket({ matches }: Props) {
                 const legs = roundGroups[num];
                 const leg1 = legs.find(l => l.leg === 1)!;
                 const leg2 = legs.find(l => l.leg === 2);
+                const allApproved = legs.every(l => l.approved && l.home_score !== null && l.away_score !== null);
                 const agg1 = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
                 const agg2 = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
-                const winnerId = agg1 > agg2 ? leg1.home_team.id : agg2 > agg1 ? leg1.away_team.id : null;
+                const winnerId =
+                  allApproved && (agg1 !== agg2 || leg2 || idx + 1 === rounds.length)
+                    ? agg1 > agg2
+                      ? leg1.home_team.id
+                      : agg2 > agg1
+                        ? leg1.away_team.id
+                        : null
+                    : null;
 
-                const homeHighlight = winnerId && winnerId === leg1.home_team.id ? 'border-2 border-yellow-500' : '';
-                const awayHighlight = winnerId && winnerId === leg1.away_team.id ? 'border-2 border-yellow-500' : '';
+                const homeHighlight = allApproved && winnerId === leg1.home_team.id ? 'border-2 border-yellow-500' : '';
+                const awayHighlight = allApproved && winnerId === leg1.away_team.id ? 'border-2 border-yellow-500' : '';
 
                 return (
                   <div key={num} className="space-y-1">
