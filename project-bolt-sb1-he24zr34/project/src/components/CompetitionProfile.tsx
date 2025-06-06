@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import MatchResultForm from './MatchResultForm';
 import { useAuth } from '../hooks/useAuth';
 import ChatButton from './ChatButton';
-import SlotsBracket from './SlotsBracket';
+import KnockoutBracket from './KnockoutBracket';
 
 interface Competition {
   id: string;
@@ -120,15 +120,16 @@ export default function CompetitionProfile() {
       if (competitionError) throw competitionError;
       setCompetition(competitionData);
 
-      const { data: formatData, error: formatError } = await supabase
-        .from('competition_format')
-        .select('settings')
-        .eq('competition_id', id)
+      const { data: compData, error: compError } = await supabase
+        .from('competitions')
+        .select('bracket_slots, type')
+        .eq('id', id)
         .single();
 
-      if (formatError) throw formatError;
+      if (compError) throw compError;
 
-      const slots = formatData?.settings?.slots || {};
+      const slots = compData?.bracket_slots || {};
+      const compType = compData?.type as CompetitionType | undefined;
       if (Object.keys(slots).length > 0) {
         const { data: teamsData, error: teamsError } = await supabase
           .from('teams')
@@ -148,8 +149,9 @@ export default function CompetitionProfile() {
       }
 
       // Fetch matches with additional fields for cup competitions
+      const matchTable = compType ? MATCH_TABLES[compType] : MATCH_TABLES['league'];
       const matchesQuery = supabase
-        .from('matches')
+        .from(matchTable)
         .select(`
           id,
           home_team:teams!home_team_id(id, name, logo_url),
@@ -159,11 +161,9 @@ export default function CompetitionProfile() {
           scheduled_for,
           match_day,
           approved,
-          competition_matches(
-            round,
-            leg,
-            bracket_position
-          )
+          round,
+          leg,
+          bracket_position
         `)
         .eq('competition_id', id)
         .order('match_day', { ascending: true });
@@ -172,15 +172,7 @@ export default function CompetitionProfile() {
 
       if (matchesError) throw matchesError;
 
-      // Transform matches data to include bracket information
-      const transformedMatches = matchesData?.map(match => ({
-        ...match,
-        round: match.competition_matches[0]?.round,
-        leg: match.competition_matches[0]?.leg,
-        bracket_position: match.competition_matches[0]?.bracket_position
-      })) || [];
-
-      setMatches(transformedMatches);
+      setMatches(matchesData || []);
 
       // Fetch top scorers
       const { data: scorersData, error: scorersError } = await supabase
@@ -301,7 +293,7 @@ export default function CompetitionProfile() {
       {/* Content */}
       <div className="bg-gray-800 rounded-lg p-6">
         {activeTab === 'bracket' && competition.type === 'cup' && (
-          <SlotsBracket slots={slotTeams} matches={matches} />
+          <KnockoutBracket matches={matches} />
         )}
 
         {activeTab === 'calendar' && (

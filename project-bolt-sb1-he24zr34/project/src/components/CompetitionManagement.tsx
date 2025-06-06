@@ -11,6 +11,7 @@ import {
   Search,
   Shuffle,
   Save,
+  Check,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -18,6 +19,20 @@ import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
 import CompetitionBracket from './CompetitionBracket';
+
+const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
+
+const MATCH_TABLES: Record<CompetitionType, string> = {
+  league: 'matches_league',
+  champions: 'matches_champions',
+  cup: 'matches_cup',
+};
+
+const STATS_TABLES: Record<CompetitionType, string> = {
+  league: 'stats_league',
+  champions: 'stats_champions',
+  cup: 'stats_cup',
+};
 
 type CompetitionType = 'league' | 'champions' | 'cup';
 
@@ -51,6 +66,7 @@ interface Match {
     match_number: number;
     round: number;
   };
+  match_results?: { id: string }[];
 }
 
 type ManagementTab = 'teams' | 'calendar' | 'results' | 'bracket';
@@ -82,6 +98,7 @@ export default function CompetitionManagement() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
+  const [pendingResults, setPendingResults] = useState<Match[]>([]);
   const [newMatch, setNewMatch] = useState({
     date: '',
     homeTeamId: '',
@@ -106,6 +123,12 @@ export default function CompetitionManagement() {
       fetchBracketTeams();
     }
   }, [selectedCompetition]);
+
+  useEffect(() => {
+    if (activeManagementTab === 'results' && selectedCompetition) {
+      fetchPendingResults(selectedCompetition.id, selectedCompetition.type);
+    }
+  }, [activeManagementTab, selectedCompetition]);
 
   const fetchCompetitions = async () => {
     try {
@@ -138,31 +161,51 @@ export default function CompetitionManagement() {
     }
   };
 
+  const fetchPendingResults = async (competitionId: string, type: CompetitionType) => {
+    try {
+      const { data, error } = await supabase
+        .from(MATCH_TABLES[type])
+        .select(
+          `id,
+          home_team:teams!home_team_id(name),
+          away_team:teams!away_team_id(name),
+          scheduled_for,
+          match_day,
+          approved,
+          match_results(id, team_id, teams(name))`
+        )
+        .eq('competition_id', competitionId)
+        .order('match_day');
+
+      if (error) throw error;
+
+      const pending = (data || []).filter(
+        (m: any) => !m.approved && m.match_results && m.match_results.length > 0
+      );
+      setPendingResults(pending);
+    } catch (err) {
+      console.error('Error fetching pending results:', err);
+    }
+  };
+
   const fetchBracketTeams = async () => {
     if (!selectedCompetition) return;
 
     try {
       // Get competition format settings
-      const { data: formatData, error: formatError } = await supabase
-        .from('competition_format')
-        .select('settings')
-        .eq('competition_id', selectedCompetition.id)
+      const { data: compData, error: compError } = await supabase
+        .from('competitions')
+        .select('bracket_slots')
+        .eq('id', selectedCompetition.id)
         .single();
 
-      if (formatError) throw formatError;
+      if (compError) throw compError;
 
-      if (formatData?.settings?.slots) {
-        setBracketTeams(formatData.settings.slots);
+      if (compData?.bracket_slots) {
+        setBracketTeams(compData.bracket_slots);
       }
 
-      // Get selected teams
-      const { data: teamsData, error: teamsError } = await supabase
-        .from('competition_teams')
-        .select('team_id')
-        .eq('competition_id', selectedCompetition.id);
-
-      if (teamsError) throw teamsError;
-      setSelectedTeams(teamsData?.map(t => t.team_id) || []);
+      setSelectedTeams([]);
     } catch (error) {
       console.error('Error fetching bracket teams:', error);
       toast.error('Error loading bracket teams');
@@ -209,37 +252,15 @@ export default function CompetitionManagement() {
 
       if (competitionError) throw competitionError;
 
-      // Create format settings
       const { error: formatError } = await supabase
-        .from('competition_format')
-        .insert({
-          competition_id: competition.id,
-          settings: {
-            type: formData.type,
-            teamCount: formData.teamCount,
-            slots: {},
-            ...(formData.type === 'cup' && {
-              knockoutLegs: 2,
-              finalLegs: 1
-            })
-          }
-        });
+        .from('competitions')
+        .update({ bracket_slots: {} })
+        .eq('id', competition.id);
 
       if (formatError) throw formatError;
 
       // Add selected teams
-      if (selectedTeams.length > 0) {
-        const { error: teamsError } = await supabase
-          .from('competition_teams')
-          .insert(
-            selectedTeams.map(teamId => ({
-              competition_id: competition.id,
-              team_id: teamId
-            }))
-          );
-
-        if (teamsError) throw teamsError;
-      }
+      // Selected teams would be stored with the matches when the bracket is created
 
       toast.success('Competition created successfully!');
       setIsCreateModalOpen(false);
@@ -285,7 +306,8 @@ export default function CompetitionManagement() {
     await Promise.all([
       fetchTeams(),
       fetchCompetitionTeams(competition.id),
-      fetchMatches(competition.id),
+      fetchMatches(competition.id, competition.type),
+      fetchPendingResults(competition.id, competition.type),
     ]);
   };
 
@@ -303,10 +325,10 @@ export default function CompetitionManagement() {
     }
   };
 
-  const fetchMatches = async (competitionId: string) => {
+  const fetchMatches = async (competitionId: string, type: CompetitionType) => {
     try {
       const { data, error } = await supabase
-        .from('matches')
+        .from(MATCH_TABLES[type])
         .select(
           `id,
           home_team:teams!home_team_id(name),
@@ -318,22 +340,122 @@ export default function CompetitionManagement() {
           approved,
           home_team_id,
           away_team_id,
-          competition_matches(round, leg, bracket_position)`
+          round,
+          leg,
+          bracket_position`
         )
         .eq('competition_id', competitionId)
         .order('match_day', { ascending: true });
 
       if (error) throw error;
 
-      const transformed = (data || []).map((m: any) => ({
-        ...m,
-        round: m.competition_matches[0]?.round,
-        leg: m.competition_matches[0]?.leg,
-        bracket_position: m.competition_matches[0]?.bracket_position,
-      }));
+      const transformed = (data || []) as Match[];
       setMatches(transformed);
+      await advanceWinners(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);
+    }
+  };
+
+  const advanceWinners = async (currentMatches: Match[]) => {
+    if (!selectedCompetition) return;
+
+    const totalRounds = Math.log2(selectedTeams.length);
+
+    for (let round = 1; round < totalRounds; round++) {
+      const matchesInRound = currentMatches
+        .filter(m => m.round === round)
+        .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
+
+      const groups: { [key: number]: Match[] } = {};
+      matchesInRound.forEach(m => {
+        const num = m.bracket_position?.match_number || 0;
+        groups[num] = groups[num] ? [...groups[num], m] : [m];
+      });
+
+      const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+      if (groupNumbers.length === 0) continue;
+
+      const winners: string[] = [];
+      for (const num of groupNumbers) {
+        const legs = groups[num];
+        if (!legs.every(l => l.approved)) {
+          winners.length = 0;
+          break;
+        }
+
+        const leg1 = legs.find(l => l.leg === 1)!;
+        const leg2 = legs.find(l => l.leg === 2);
+        const homeTotal = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
+        const awayTotal = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
+        const winner = homeTotal >= awayTotal ? leg1.home_team_id : leg1.away_team_id;
+        winners.push(winner);
+      }
+
+      if (winners.length === 0) continue;
+
+      for (let i = 0; i < winners.length; i += 2) {
+        const winner1 = winners[i];
+        const winner2 = winners[i + 1];
+        if (!winner1 || !winner2) continue;
+
+        const matchNumber = Math.floor(i / 2) + 1;
+
+        const existing = currentMatches.find(
+          m => m.round === round + 1 && m.bracket_position?.match_number === matchNumber && m.leg === 1
+        );
+        if (existing) continue;
+
+        // create leg 1
+        const { data: legOne, error: legOneError } = await supabase
+          .from(MATCH_TABLES[selectedCompetition.type])
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: winner1,
+            away_team_id: winner2,
+            match_day: round * 2 + 1,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled',
+            round: round + 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: round + 1 }
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
+          )
+          .single();
+
+        if (legOneError) continue;
+
+        currentMatches.push({ ...(legOne as Match) });
+
+        const isFinal = round + 1 === totalRounds;
+        if (!isFinal) {
+          const { data: legTwo, error: legTwoError } = await supabase
+            .from(MATCH_TABLES[selectedCompetition.type])
+            .insert({
+              competition_id: selectedCompetition.id,
+              home_team_id: winner2,
+              away_team_id: winner1,
+              match_day: round * 2 + 2,
+              scheduled_for: UNSCHEDULED_DATE,
+              status: 'scheduled',
+              round: round + 1,
+              leg: 2,
+              bracket_position: { match_number: matchNumber, round: round + 1 }
+            })
+            .select(
+              `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
+            )
+            .single();
+
+          if (!legTwoError) {
+            currentMatches.push({ ...(legTwo as Match) });
+          }
+        }
+
+        setMatches([...currentMatches]);
+      }
     }
   };
 
@@ -350,32 +472,12 @@ export default function CompetitionManagement() {
       return;
     }
     
-    try {
-      if (selectedTeams.includes(teamId)) {
-        // Remove team
-        const { error } = await supabase
-          .from('competition_teams')
-          .delete()
-          .eq('competition_id', selectedCompetition.id)
-          .eq('team_id', teamId);
-
-        if (error) throw error;
-        setSelectedTeams(prev => prev.filter(id => id !== teamId));
-      } else {
-        // Add team
-        const { error } = await supabase
-          .from('competition_teams')
-          .insert({
-            competition_id: selectedCompetition.id,
-            team_id: teamId,
-          });
-
-        if (error) throw error;
-        setSelectedTeams(prev => [...prev, teamId]);
-      }
-    } catch (error) {
-      console.error('Error toggling team:', error);
-      toast.error('Error managing teams');
+    if (selectedTeams.includes(teamId)) {
+      setSelectedTeams(prev => prev.filter(id => id !== teamId));
+    } else if (selectedTeams.length < formData.teamCount) {
+      setSelectedTeams(prev => [...prev, teamId]);
+    } else {
+      toast.error(`Maximum ${formData.teamCount} teams allowed`);
     }
   };
 
@@ -413,21 +515,77 @@ export default function CompetitionManagement() {
     try {
       setIsLoading(true);
 
-      // Update competition format with new slot assignments
+      // Save bracket slots in the competition row
       const { error: formatError } = await supabase
-        .from('competition_format')
-        .update({
-          settings: {
-            type: 'cup',
-            teamCount: selectedTeams.length,
-            slots: bracketTeams,
-            knockoutLegs: 2,
-            finalLegs: 1
-          }
-        })
-        .eq('competition_id', selectedCompetition.id);
+        .from('competitions')
+        .update({ bracket_slots: bracketTeams })
+        .eq('id', selectedCompetition.id);
 
       if (formatError) throw formatError;
+
+      const createdMatches: Match[] = [];
+      const slotEntries = Object.entries(bracketTeams);
+
+      for (let i = 0; i < slotEntries.length; i += 2) {
+        const homeTeamId = slotEntries[i][1];
+        const awayTeamId = slotEntries[i + 1]?.[1];
+        const matchNumber = i / 2 + 1;
+        if (!homeTeamId || !awayTeamId) continue;
+
+        const existing = matches.find(
+          m => m.round === 1 && m.bracket_position?.match_number === matchNumber
+        );
+        if (existing) continue;
+
+        // first leg
+        const { data: firstLeg, error: firstError } = await supabase
+          .from(MATCH_TABLES[selectedCompetition.type])
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            match_day: 1,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled',
+            round: 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: 1 }
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
+          )
+          .single();
+
+        if (firstError) throw firstError;
+        createdMatches.push({ ...(firstLeg as Match) });
+
+        // second leg
+        const { data: secondLeg, error: secondError } = await supabase
+          .from(MATCH_TABLES[selectedCompetition.type])
+          .insert({
+            competition_id: selectedCompetition.id,
+            home_team_id: awayTeamId,
+            away_team_id: homeTeamId,
+            match_day: 2,
+            scheduled_for: UNSCHEDULED_DATE,
+            status: 'scheduled',
+            round: 1,
+            leg: 2,
+            bracket_position: { match_number: matchNumber, round: 1 }
+          })
+          .select(
+            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
+          )
+          .single();
+
+        if (secondError) throw secondError;
+
+        createdMatches.push({ ...(secondLeg as Match) });
+      }
+
+      if (createdMatches.length > 0) {
+        setMatches(prev => [...prev, ...createdMatches]);
+      }
 
       toast.success('Bracket saved successfully');
     } catch (error) {
@@ -454,6 +612,27 @@ export default function CompetitionManagement() {
     setEditingMatch(null);
   };
 
+  const handleDeleteMatch = async (matchId: string) => {
+    try {
+      const { error } = await supabase
+        .from(MATCH_TABLES[selectedCompetition!.type])
+        .delete()
+        .eq('id', matchId);
+
+      if (error) throw error;
+
+      setMatches(prev => prev.filter(m => m.id !== matchId));
+      if (editingMatch?.id === matchId) {
+        resetMatchForm();
+      }
+
+      toast.success('Partita eliminata');
+    } catch (err) {
+      console.error('Error deleting match:', err);
+      toast.error('Errore eliminazione');
+    }
+  };
+
   const handleSaveMatch = async () => {
     if (!selectedCompetition) return;
 
@@ -465,11 +644,13 @@ export default function CompetitionManagement() {
     try {
       setIsLoading(true);
 
+      const iso = new Date(newMatch.date).toISOString();
+
       if (editingMatch) {
         const { data, error } = await supabase
-          .from('matches')
+          .from(MATCH_TABLES[selectedCompetition.type])
           .update({
-            scheduled_for: newMatch.date,
+            scheduled_for: iso,
             home_team_id: newMatch.homeTeamId,
             away_team_id: newMatch.awayTeamId,
             match_day: newMatch.matchDay,
@@ -488,13 +669,13 @@ export default function CompetitionManagement() {
         toast.success('Partita aggiornata');
       } else {
         const { data, error } = await supabase
-          .from('matches')
+          .from(MATCH_TABLES[selectedCompetition.type])
           .insert({
             competition_id: selectedCompetition.id,
             home_team_id: newMatch.homeTeamId,
             away_team_id: newMatch.awayTeamId,
             match_day: newMatch.matchDay,
-            scheduled_for: newMatch.date,
+            scheduled_for: iso,
             status: 'scheduled',
           })
           .select(
@@ -582,14 +763,17 @@ export default function CompetitionManagement() {
 
   const handleUpdateMatchDate = async (matchId: string, date: string) => {
     try {
+      const iso = new Date(date).toISOString();
       const { error } = await supabase
-        .from('matches')
-        .update({ scheduled_for: date })
+        .from(MATCH_TABLES[selectedCompetition!.type])
+        .update({ scheduled_for: iso })
         .eq('id', matchId);
 
       if (error) throw error;
 
-      setMatches(prev => prev.map(m => (m.id === matchId ? { ...m, scheduled_for: date } : m)));
+      setMatches(prev =>
+        prev.map(m => (m.id === matchId ? { ...m, scheduled_for: iso } : m))
+      );
       toast.success('Data aggiornata');
     } catch (err) {
       console.error('Error updating match date:', err);
@@ -610,10 +794,14 @@ export default function CompetitionManagement() {
             .map(match => (
               <div
                 key={match.id}
-                className="bg-gray-700 p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0"
+                className={`p-3 rounded-lg flex flex-col md:flex-row md:items-center md:justify-between space-y-2 md:space-y-0 ${match.approved ? 'bg-green-700' : 'bg-gray-700'}`}
               >
                 <span>
                   {match.home_team.name} vs {match.away_team.name}
+                  {match.scheduled_for === UNSCHEDULED_DATE && (
+                    <span className="ml-2 text-yellow-400">⚠️</span>
+                  )}
+                  {match.approved && <span className="ml-2 text-green-300">✔️</span>}
                 </span>
                 <div className="flex items-center space-x-2">
                   <input
@@ -621,14 +809,26 @@ export default function CompetitionManagement() {
                     value={format(new Date(match.scheduled_for), "yyyy-MM-dd'T'HH:mm")}
                     onChange={e => handleUpdateMatchDate(match.id, e.target.value)}
                     className="bg-gray-800 rounded px-2 py-1 text-white"
+                    disabled={match.approved}
                   />
-                  <button
-                    type="button"
-                    onClick={() => handleEditMatch(match)}
-                    className="text-gray-300 hover:text-white"
-                  >
-                    <Edit2 size={18} />
-                  </button>
+                  {!match.approved && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleEditMatch(match)}
+                        className="text-gray-300 hover:text-white"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMatch(match.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -1055,7 +1255,45 @@ export default function CompetitionManagement() {
             {activeManagementTab === 'results' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Risultati</h4>
-                {/* Results content */}
+                {pendingResults.length === 0 ? (
+                  <p className="text-gray-400">Nessun risultato da verificare</p>
+                ) : (
+                  pendingResults.map(match => {
+                    const submittedTeams = match.match_results.map((r: any) => r.teams.name);
+                    const missing = [match.home_team.name, match.away_team.name].filter(n => !submittedTeams.includes(n));
+                    const showVerify = match.match_results.length >= 2;
+                    return (
+                      <div
+                        key={match.id}
+                        className="bg-gray-700 rounded-lg p-4 mb-3 flex items-center justify-between"
+                      >
+                        <div>
+                          <p className="font-medium">
+                            {match.home_team.name} vs {match.away_team.name}
+                          </p>
+                          <p className="text-sm text-gray-400">
+                            Giornata {match.match_day} -{' '}
+                            {format(new Date(match.scheduled_for), 'dd MMM yyyy HH:mm', { locale: it })}
+                          </p>
+                          {!showVerify && (
+                            <p className="text-sm text-yellow-400 mt-1">
+                              Risultato inviato da {submittedTeams.join(', ')}. In attesa di {missing.join(', ')}
+                            </p>
+                          )}
+                        </div>
+                        {showVerify && (
+                          <button
+                            onClick={() => navigate(`/verification-game/${match.id}`)}
+                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
+                          >
+                            <Check size={20} />
+                            <span>Verifica</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             )}
           </div>

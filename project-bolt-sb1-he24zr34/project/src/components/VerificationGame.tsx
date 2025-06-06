@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 
 type VerificationStep = 'lineups' | 'results' | 'stats' | 'stream' | 'confirm';
 
+const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
+
 const positionLabels: { [key: string]: string } = {
   'POR': 'Portiere',
   'TD': 'Terzino Destro',
@@ -43,6 +45,7 @@ export default function VerificationGame() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [playerNames, setPlayerNames] = useState<{ [key: string]: string }>({});
+  const [editedStats, setEditedStats] = useState<{ [key: string]: { goals: number; assists: number } }>({});
 
   useEffect(() => {
     if (matchId) {
@@ -56,6 +59,7 @@ export default function VerificationGame() {
         .from('matches')
         .select(`
           id,
+          competition_id,
           home_team:teams!home_team_id(name),
           away_team:teams!away_team_id(name),
           scheduled_for,
@@ -128,6 +132,13 @@ export default function VerificationGame() {
         }
       }
 
+      if (data?.match_player_stats) {
+        const statsMap: { [key: string]: { goals: number; assists: number } } = {};
+        data.match_player_stats.forEach((s: any) => {
+          statsMap[s.id] = { goals: s.goals, assists: s.assists };
+        });
+        setEditedStats(statsMap);
+      }
       setMatch(data);
     } catch (error) {
       console.error('Error fetching match data:', error);
@@ -170,6 +181,14 @@ export default function VerificationGame() {
         if (approveError) throw approveError;
       }
 
+      for (const statId of Object.keys(editedStats)) {
+        const { goals, assists } = editedStats[statId];
+        await supabase
+          .from('match_player_stats')
+          .update({ goals, assists })
+          .eq('id', statId);
+      }
+
       // Update match status directly
       const { error: matchError } = await supabase
         .from('matches')
@@ -182,6 +201,7 @@ export default function VerificationGame() {
 
       if (matchError) throw matchError;
 
+      await advanceKnockoutRounds(match.competition_id);
       toast.success('Match result approved successfully');
       navigate('/admin');
     } catch (error) {
@@ -194,6 +214,154 @@ export default function VerificationGame() {
 
   const handleScoreEdit = (homeScore: number, awayScore: number) => {
     setEditedScores({ homeScore, awayScore });
+  };
+
+  const advanceKnockoutRounds = async (competitionId: string) => {
+    try {
+      const { data: teamData, error: teamError } = await supabase
+        .from('competition_teams')
+        .select('team_id')
+        .eq('competition_id', competitionId);
+
+      if (teamError) throw teamError;
+
+      const teamIds = teamData?.map(t => t.team_id) || [];
+      const totalRounds = Math.log2(teamIds.length);
+
+      const { data, error } = await supabase
+        .from('matches')
+        .select(
+          `id, home_team_id, away_team_id, home_score, away_score, approved, competition_matches(round, leg, bracket_position)`
+        )
+        .eq('competition_id', competitionId);
+
+      if (error) throw error;
+
+      const current: any[] = (data || []).map(m => ({
+        ...m,
+        round: m.competition_matches[0]?.round,
+        leg: m.competition_matches[0]?.leg,
+        bracket_position: m.competition_matches[0]?.bracket_position,
+      }));
+
+      for (let round = 1; round < totalRounds; round++) {
+        const roundMatches = current.filter(m => m.round === round);
+        const groups: { [key: number]: any[] } = {};
+        roundMatches.forEach(m => {
+          const num = m.bracket_position?.match_number || 0;
+          groups[num] = groups[num] ? [...groups[num], m] : [m];
+        });
+
+        const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+        if (groupNumbers.length === 0) continue;
+
+        const winners: string[] = [];
+        for (const num of groupNumbers) {
+          const legs = groups[num];
+          if (!legs.every(l => l.approved)) {
+            winners.length = 0;
+            break;
+          }
+
+          const leg1 = legs.find(l => l.leg === 1)!;
+          const leg2 = legs.find(l => l.leg === 2);
+          const total1 = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
+          const total2 = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
+          const winner = total1 >= total2 ? leg1.home_team_id : leg1.away_team_id;
+          winners.push(winner);
+        }
+
+        if (winners.length === 0) continue;
+
+        for (let i = 0; i < winners.length; i += 2) {
+          const w1 = winners[i];
+          const w2 = winners[i + 1];
+          if (!w1 || !w2) continue;
+
+          const matchNumber = Math.floor(i / 2) + 1;
+          const exists = current.find(
+            mm => mm.round === round + 1 &&
+              mm.bracket_position?.match_number === matchNumber &&
+              mm.leg === 1
+          );
+          if (exists) continue;
+
+          const { data: firstLeg, error: firstErr } = await supabase
+            .from('matches')
+            .insert({
+              competition_id: competitionId,
+              home_team_id: w1,
+              away_team_id: w2,
+              match_day: round * 2 + 1,
+              scheduled_for: UNSCHEDULED_DATE,
+              status: 'scheduled',
+            })
+            .select('id')
+            .single();
+
+          if (firstErr || !firstLeg) continue;
+
+          await supabase.from('competition_matches').insert({
+            competition_id: competitionId,
+            match_id: firstLeg.id,
+            round: round + 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: round + 1 },
+          });
+
+          current.push({
+            id: firstLeg.id,
+            home_team_id: w1,
+            away_team_id: w2,
+            home_score: null,
+            away_score: null,
+            approved: false,
+            round: round + 1,
+            leg: 1,
+            bracket_position: { match_number: matchNumber, round: round + 1 },
+          });
+
+          if (round + 1 !== totalRounds) {
+            const { data: secondLeg, error: secondErr } = await supabase
+              .from('matches')
+              .insert({
+                competition_id: competitionId,
+                home_team_id: w2,
+                away_team_id: w1,
+                match_day: round * 2 + 2,
+                scheduled_for: UNSCHEDULED_DATE,
+                status: 'scheduled',
+              })
+              .select('id')
+              .single();
+
+            if (!secondErr && secondLeg) {
+              await supabase.from('competition_matches').insert({
+                competition_id: competitionId,
+                match_id: secondLeg.id,
+                round: round + 1,
+                leg: 2,
+                bracket_position: { match_number: matchNumber, round: round + 1 },
+              });
+
+              current.push({
+                id: secondLeg.id,
+                home_team_id: w2,
+                away_team_id: w1,
+                home_score: null,
+                away_score: null,
+                approved: false,
+                round: round + 1,
+                leg: 2,
+                bracket_position: { match_number: matchNumber, round: round + 1 },
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error advancing knockout rounds', err);
+    }
   };
 
   const checkResultConsistency = (match: any) => {
@@ -494,13 +662,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === homeTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }
@@ -524,13 +717,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === awayTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }
