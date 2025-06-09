@@ -18,7 +18,6 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
-import CompetitionBracket from './CompetitionBracket';
 
 const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
 
@@ -34,12 +33,17 @@ const STATS_TABLES: Record<CompetitionType, string> = {
   cup: 'stats_cup',
 };
 
+const STANDINGS_TABLES: Record<CompetitionType, string> = {
+  league: 'standings_league',
+  champions: 'standings_champions_groups',
+  cup: '', // Cup doesn't have standings
+};
+
 type CompetitionType = 'league' | 'champions' | 'cup';
 
-interface Competition {
+interface Edition {
   id: string;
   name: string;
-  image_url: string | null;
   type: CompetitionType;
   status: string;
 }
@@ -62,6 +66,8 @@ interface Match {
   approved?: boolean;
   round?: number;
   leg?: number;
+  stage?: string;
+  group_name?: string;
   bracket_position?: {
     match_number: number;
     round: number;
@@ -85,14 +91,13 @@ const teamCountOptions: Record<CompetitionType, number[]> = {
 
 export default function CompetitionManagement() {
   const navigate = useNavigate();
-  const [competitions, setCompetitions] = useState<Competition[]>([]);
+  const [editions, setEditions] = useState<Edition[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
-  const [selectedCompetition, setSelectedCompetition] = useState<Competition | null>(null);
+  const [selectedEdition, setSelectedEdition] = useState<Edition | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     type: 'league' as CompetitionType,
-    image: null as File | null,
     teamCount: 8,
   });
   const [allTeams, setAllTeams] = useState<Team[]>([]);
@@ -113,35 +118,35 @@ export default function CompetitionManagement() {
   const [bracketTeams, setBracketTeams] = useState<{[key: string]: string}>({});
 
   useEffect(() => {
-    fetchCompetitions();
+    fetchEditions();
     fetchTeams();
   }, []);
 
   useEffect(() => {
-    if (selectedCompetition?.type === 'cup') {
+    if (selectedEdition?.type === 'cup') {
       setActiveManagementTab('teams');
       fetchBracketTeams();
     }
-  }, [selectedCompetition]);
+  }, [selectedEdition]);
 
   useEffect(() => {
-    if (activeManagementTab === 'results' && selectedCompetition) {
-      fetchPendingResults(selectedCompetition.id, selectedCompetition.type);
+    if (activeManagementTab === 'results' && selectedEdition) {
+      fetchPendingResults(selectedEdition.id, selectedEdition.type);
     }
-  }, [activeManagementTab, selectedCompetition]);
+  }, [activeManagementTab, selectedEdition]);
 
-  const fetchCompetitions = async () => {
+  const fetchEditions = async () => {
     try {
       const { data, error } = await supabase
-        .from('competitions')
+        .from('editions')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setCompetitions(data || []);
+      setEditions(data || []);
     } catch (error) {
-      console.error('Error fetching competitions:', error);
-      toast.error('Error loading competitions');
+      console.error('Error fetching editions:', error);
+      toast.error('Error loading editions');
     } finally {
       setIsLoading(false);
     }
@@ -161,7 +166,7 @@ export default function CompetitionManagement() {
     }
   };
 
-  const fetchPendingResults = async (competitionId: string, type: CompetitionType) => {
+  const fetchPendingResults = async (editionId: string, type: CompetitionType) => {
     try {
       const { data, error } = await supabase
         .from(MATCH_TABLES[type])
@@ -174,7 +179,7 @@ export default function CompetitionManagement() {
           approved,
           match_results(id, team_id, teams(name))`
         )
-        .eq('competition_id', competitionId)
+        .eq('edition_id', editionId)
         .order('match_day');
 
       if (error) throw error;
@@ -189,20 +194,20 @@ export default function CompetitionManagement() {
   };
 
   const fetchBracketTeams = async () => {
-    if (!selectedCompetition) return;
+    if (!selectedEdition) return;
 
     try {
-      // Get competition format settings
-      const { data: compData, error: compError } = await supabase
-        .from('competitions')
+      // Get edition format settings
+      const { data: editionData, error: editionError } = await supabase
+        .from('editions')
         .select('bracket_slots')
-        .eq('id', selectedCompetition.id)
+        .eq('id', selectedEdition.id)
         .single();
 
-      if (compError) throw compError;
+      if (editionError) throw editionError;
 
-      if (compData?.bracket_slots) {
-        setBracketTeams(compData.bracket_slots);
+      if (editionData?.bracket_slots) {
+        setBracketTeams(editionData.bracket_slots);
       }
 
       setSelectedTeams([]);
@@ -212,120 +217,74 @@ export default function CompetitionManagement() {
     }
   };
 
-  const handleCreateCompetition = async (e: React.FormEvent) => {
+  const handleCreateEdition = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
       setIsLoading(true);
-      let imageUrl = null;
 
-      if (formData.image) {
-        const timestamp = Date.now();
-        const fileExt = formData.image.name.split('.').pop();
-        const fileName = `${timestamp}.${fileExt}`;
-        const filePath = `competitions/${fileName}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from('team-assets')
-          .upload(filePath, formData.image);
-
-        if (uploadError) throw uploadError;
-
-        const { data: { publicUrl } } = supabase.storage
-          .from('team-assets')
-          .getPublicUrl(filePath);
-
-        imageUrl = publicUrl;
-      }
-
-      // Create competition
-      const { data: competition, error: competitionError } = await supabase
-        .from('competitions')
+      // Create edition
+      const { data: edition, error: editionError } = await supabase
+        .from('editions')
         .insert({
           name: formData.name,
           type: formData.type,
-          image_url: imageUrl,
-          status: 'in_corso'
+          status: 'active'
         })
         .select()
         .single();
 
-      if (competitionError) throw competitionError;
+      if (editionError) throw editionError;
 
-      const { error: formatError } = await supabase
-        .from('competitions')
-        .update({ bracket_slots: {} })
-        .eq('id', competition.id);
-
-      if (formatError) throw formatError;
-
-      // Add selected teams
-      // Selected teams would be stored with the matches when the bracket is created
-
-      toast.success('Competition created successfully!');
+      toast.success('Edition created successfully!');
       setIsCreateModalOpen(false);
-      setFormData({ name: '', type: 'league', image: null, teamCount: 8 });
+      setFormData({ name: '', type: 'league', teamCount: 8 });
       setSelectedTeams([]);
       setCreateStep(1);
-      fetchCompetitions();
+      fetchEditions();
     } catch (error: any) {
-      console.error('Error creating competition:', error);
-      toast.error(error.message || 'Error creating competition');
+      console.error('Error creating edition:', error);
+      toast.error(error.message || 'Error creating edition');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleDeleteCompetition = async (id: string) => {
+  const handleDeleteEdition = async (id: string) => {
     try {
       const { error } = await supabase
-        .from('competitions')
+        .from('editions')
         .delete()
         .eq('id', id);
 
       if (error) throw error;
 
-      toast.success('Competition deleted successfully!');
-      fetchCompetitions();
+      toast.success('Edition deleted successfully!');
+      fetchEditions();
     } catch (error) {
-      console.error('Error deleting competition:', error);
-      toast.error('Error deleting competition');
+      console.error('Error deleting edition:', error);
+      toast.error('Error deleting edition');
     }
   };
 
-  const handleManageCompetition = async (
-    competition: Competition,
+  const handleManageEdition = async (
+    edition: Edition,
     e?: React.MouseEvent<HTMLButtonElement>
   ) => {
     e?.preventDefault();
     e?.stopPropagation();
 
-    setSelectedCompetition(competition);
+    setSelectedEdition(edition);
     setIsManageModalOpen(true);
 
     await Promise.all([
       fetchTeams(),
-      fetchCompetitionTeams(competition.id),
-      fetchMatches(competition.id, competition.type),
-      fetchPendingResults(competition.id, competition.type),
+      fetchMatches(edition.id, edition.type),
+      fetchPendingResults(edition.id, edition.type),
     ]);
   };
 
-  const fetchCompetitionTeams = async (competitionId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('competition_teams')
-        .select('team_id')
-        .eq('competition_id', competitionId);
-
-      if (error) throw error;
-      setSelectedTeams(data.map(item => item.team_id));
-    } catch (error) {
-      console.error('Error fetching competition teams:', error);
-    }
-  };
-
-  const fetchMatches = async (competitionId: string, type: CompetitionType) => {
+  const fetchMatches = async (editionId: string, type: CompetitionType) => {
     try {
       const { data, error } = await supabase
         .from(MATCH_TABLES[type])
@@ -342,125 +301,24 @@ export default function CompetitionManagement() {
           away_team_id,
           round,
           leg,
+          stage,
+          group_name,
           bracket_position`
         )
-        .eq('competition_id', competitionId)
+        .eq('edition_id', editionId)
         .order('match_day', { ascending: true });
 
       if (error) throw error;
 
       const transformed = (data || []) as Match[];
       setMatches(transformed);
-      await advanceWinners(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);
     }
   };
 
-  const advanceWinners = async (currentMatches: Match[]) => {
-    if (!selectedCompetition) return;
-
-    const totalRounds = Math.log2(selectedTeams.length);
-
-    for (let round = 1; round < totalRounds; round++) {
-      const matchesInRound = currentMatches
-        .filter(m => m.round === round)
-        .sort((a, b) => (a.bracket_position?.match_number || 0) - (b.bracket_position?.match_number || 0));
-
-      const groups: { [key: number]: Match[] } = {};
-      matchesInRound.forEach(m => {
-        const num = m.bracket_position?.match_number || 0;
-        groups[num] = groups[num] ? [...groups[num], m] : [m];
-      });
-
-      const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
-      if (groupNumbers.length === 0) continue;
-
-      const winners: string[] = [];
-      for (const num of groupNumbers) {
-        const legs = groups[num];
-        if (!legs.every(l => l.approved)) {
-          winners.length = 0;
-          break;
-        }
-
-        const leg1 = legs.find(l => l.leg === 1)!;
-        const leg2 = legs.find(l => l.leg === 2);
-        const homeTotal = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
-        const awayTotal = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
-        const winner = homeTotal >= awayTotal ? leg1.home_team_id : leg1.away_team_id;
-        winners.push(winner);
-      }
-
-      if (winners.length === 0) continue;
-
-      for (let i = 0; i < winners.length; i += 2) {
-        const winner1 = winners[i];
-        const winner2 = winners[i + 1];
-        if (!winner1 || !winner2) continue;
-
-        const matchNumber = Math.floor(i / 2) + 1;
-
-        const existing = currentMatches.find(
-          m => m.round === round + 1 && m.bracket_position?.match_number === matchNumber && m.leg === 1
-        );
-        if (existing) continue;
-
-        // create leg 1
-        const { data: legOne, error: legOneError } = await supabase
-          .from(MATCH_TABLES[selectedCompetition.type])
-          .insert({
-            competition_id: selectedCompetition.id,
-            home_team_id: winner1,
-            away_team_id: winner2,
-            match_day: round * 2 + 1,
-            scheduled_for: UNSCHEDULED_DATE,
-            status: 'scheduled',
-            round: round + 1,
-            leg: 1,
-            bracket_position: { match_number: matchNumber, round: round + 1 }
-          })
-          .select(
-            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
-          )
-          .single();
-
-        if (legOneError) continue;
-
-        currentMatches.push({ ...(legOne as Match) });
-
-        const isFinal = round + 1 === totalRounds;
-        if (!isFinal) {
-          const { data: legTwo, error: legTwoError } = await supabase
-            .from(MATCH_TABLES[selectedCompetition.type])
-            .insert({
-              competition_id: selectedCompetition.id,
-              home_team_id: winner2,
-              away_team_id: winner1,
-              match_day: round * 2 + 2,
-              scheduled_for: UNSCHEDULED_DATE,
-              status: 'scheduled',
-              round: round + 1,
-              leg: 2,
-              bracket_position: { match_number: matchNumber, round: round + 1 }
-            })
-            .select(
-              `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
-            )
-            .single();
-
-          if (!legTwoError) {
-            currentMatches.push({ ...(legTwo as Match) });
-          }
-        }
-
-        setMatches([...currentMatches]);
-      }
-    }
-  };
-
   const handleTeamToggle = async (teamId: string) => {
-    if (!selectedCompetition) {
+    if (!selectedEdition) {
       // Selecting teams during creation
       if (selectedTeams.includes(teamId)) {
         setSelectedTeams(prev => prev.filter(id => id !== teamId));
@@ -484,7 +342,7 @@ export default function CompetitionManagement() {
   const handleNext = () => {
     if (createStep === 1) {
       if (!formData.name.trim()) {
-        toast.error('Please enter a competition name');
+        toast.error('Please enter an edition name');
         return;
       }
       setCreateStep(2);
@@ -510,16 +368,16 @@ export default function CompetitionManagement() {
   };
 
   const handleSaveBracket = async () => {
-    if (!selectedCompetition) return;
+    if (!selectedEdition) return;
 
     try {
       setIsLoading(true);
 
-      // Save bracket slots in the competition row
+      // Save bracket slots in the edition row
       const { error: formatError } = await supabase
-        .from('competitions')
+        .from('editions')
         .update({ bracket_slots: bracketTeams })
-        .eq('id', selectedCompetition.id);
+        .eq('id', selectedEdition.id);
 
       if (formatError) throw formatError;
 
@@ -539,9 +397,9 @@ export default function CompetitionManagement() {
 
         // first leg
         const { data: firstLeg, error: firstError } = await supabase
-          .from(MATCH_TABLES[selectedCompetition.type])
+          .from(MATCH_TABLES[selectedEdition.type])
           .insert({
-            competition_id: selectedCompetition.id,
+            edition_id: selectedEdition.id,
             home_team_id: homeTeamId,
             away_team_id: awayTeamId,
             match_day: 1,
@@ -561,9 +419,9 @@ export default function CompetitionManagement() {
 
         // second leg
         const { data: secondLeg, error: secondError } = await supabase
-          .from(MATCH_TABLES[selectedCompetition.type])
+          .from(MATCH_TABLES[selectedEdition.type])
           .insert({
-            competition_id: selectedCompetition.id,
+            edition_id: selectedEdition.id,
             home_team_id: awayTeamId,
             away_team_id: homeTeamId,
             match_day: 2,
@@ -615,7 +473,7 @@ export default function CompetitionManagement() {
   const handleDeleteMatch = async (matchId: string) => {
     try {
       const { error } = await supabase
-        .from(MATCH_TABLES[selectedCompetition!.type])
+        .from(MATCH_TABLES[selectedEdition!.type])
         .delete()
         .eq('id', matchId);
 
@@ -634,7 +492,7 @@ export default function CompetitionManagement() {
   };
 
   const handleSaveMatch = async () => {
-    if (!selectedCompetition) return;
+    if (!selectedEdition) return;
 
     if (!newMatch.date || !newMatch.homeTeamId || !newMatch.awayTeamId) {
       toast.error('Compila tutti i campi');
@@ -648,7 +506,7 @@ export default function CompetitionManagement() {
 
       if (editingMatch) {
         const { data, error } = await supabase
-          .from(MATCH_TABLES[selectedCompetition.type])
+          .from(MATCH_TABLES[selectedEdition.type])
           .update({
             scheduled_for: iso,
             home_team_id: newMatch.homeTeamId,
@@ -669,9 +527,9 @@ export default function CompetitionManagement() {
         toast.success('Partita aggiornata');
       } else {
         const { data, error } = await supabase
-          .from(MATCH_TABLES[selectedCompetition.type])
+          .from(MATCH_TABLES[selectedEdition.type])
           .insert({
-            competition_id: selectedCompetition.id,
+            edition_id: selectedEdition.id,
             home_team_id: newMatch.homeTeamId,
             away_team_id: newMatch.awayTeamId,
             match_day: newMatch.matchDay,
@@ -698,9 +556,8 @@ export default function CompetitionManagement() {
     }
   };
 
-
   const renderBracket = () => {
-    if (!selectedCompetition) return null;
+    if (!selectedEdition) return null;
 
     const rounds = Math.log2(selectedTeams.length);
     const totalSlots = selectedTeams.length;
@@ -765,7 +622,7 @@ export default function CompetitionManagement() {
     try {
       const iso = new Date(date).toISOString();
       const { error } = await supabase
-        .from(MATCH_TABLES[selectedCompetition!.type])
+        .from(MATCH_TABLES[selectedEdition!.type])
         .update({ scheduled_for: iso })
         .eq('id', matchId);
 
@@ -783,7 +640,7 @@ export default function CompetitionManagement() {
 
   const renderCalendar = () => {
     const matchDays = Array.from(new Set(matches.map(m => m.match_day)));
-    const label = selectedCompetition?.type === 'league' ? 'Giornata' : 'Turno';
+    const label = selectedEdition?.type === 'league' ? 'Giornata' : 'Turno';
 
     return matchDays.map(day => (
       <div key={day} className="mb-6">
@@ -889,18 +746,6 @@ export default function CompetitionManagement() {
               ))}
             </select>
           </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Immagine
-            </label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFormData({ ...formData, image: e.target.files?.[0] || null })}
-              className="w-full"
-            />
-          </div>
         </>
       );
     }
@@ -963,35 +808,27 @@ export default function CompetitionManagement() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Gestione Competizioni</h2>
+        <h2 className="text-xl font-semibold">Gestione Edizioni</h2>
         <button
           onClick={() => setIsCreateModalOpen(true)}
           className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
         >
           <Plus size={20} />
-          <span>Crea Competizione</span>
+          <span>Crea Edizione</span>
         </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {competitions.map(competition => (
-          <div key={competition.id} className="bg-gray-700 rounded-lg p-4">
+        {editions.map(edition => (
+          <div key={edition.id} className="bg-gray-700 rounded-lg p-4">
             <div className="flex items-center space-x-4 mb-4">
-              {competition.image_url ? (
-                <img
-                  src={competition.image_url}
-                  alt={competition.name}
-                  className="w-16 h-16 rounded-lg object-cover"
-                />
-              ) : (
-                <div className="w-16 h-16 bg-gray-600 rounded-lg flex items-center justify-center">
-                  <Trophy size={32} className="text-gray-400" />
-                </div>
-              )}
+              <div className="w-16 h-16 bg-gray-600 rounded-lg flex items-center justify-center">
+                <Trophy size={32} className="text-gray-400" />
+              </div>
               <div>
-                <h3 className="font-semibold text-lg">{competition.name}</h3>
+                <h3 className="font-semibold text-lg">{edition.name}</h3>
                 <span className="text-sm text-gray-400">
-                  {competitionTypes.find(t => t.value === competition.type)?.label}
+                  {competitionTypes.find(t => t.value === edition.type)?.label}
                 </span>
               </div>
             </div>
@@ -999,7 +836,7 @@ export default function CompetitionManagement() {
             <div className="flex space-x-2">
               <button
                 type="button"
-                onClick={(e) => handleManageCompetition(competition, e)}
+                onClick={(e) => handleManageEdition(edition, e)}
                 className="flex-1 bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-lg flex items-center justify-center space-x-2"
               >
                 <Settings size={18} />
@@ -1007,7 +844,7 @@ export default function CompetitionManagement() {
               </button>
               <button
                 type="button"
-                onClick={() => handleDeleteCompetition(competition.id)}
+                onClick={() => handleDeleteEdition(edition.id)}
                 className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg"
               >
                 <Trash2 size={18} />
@@ -1017,15 +854,15 @@ export default function CompetitionManagement() {
         ))}
       </div>
 
-      {/* Create Competition Modal */}
+      {/* Create Edition Modal */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-semibold mb-4">
-              {createStep === 1 ? 'Crea Competizione' : 'Seleziona Squadre'}
+              {createStep === 1 ? 'Crea Edizione' : 'Seleziona Squadre'}
             </h3>
             
-            <form onSubmit={handleCreateCompetition} className="space-y-4">
+            <form onSubmit={handleCreateEdition} className="space-y-4">
               {renderCreateStep()}
 
               <div className="flex space-x-2">
@@ -1070,12 +907,12 @@ export default function CompetitionManagement() {
         </div>
       )}
 
-      {/* Manage Competition Modal */}
-      {isManageModalOpen && selectedCompetition && (
+      {/* Manage Edition Modal */}
+      {isManageModalOpen && selectedEdition && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-semibold">Gestione {selectedCompetition.name}</h3>
+              <h3 className="text-xl font-semibold">Gestione {selectedEdition.name}</h3>
               <button
                 onClick={() => setIsManageModalOpen(false)}
                 className="text-gray-400 hover:text-white"
@@ -1086,7 +923,7 @@ export default function CompetitionManagement() {
 
             <div className="mb-6">
               <div className="flex space-x-4">
-                {selectedCompetition.type === 'league' && (
+                {selectedEdition.type === 'league' && (
                   <button
                     onClick={() => setActiveManagementTab('teams')}
                     className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -1108,7 +945,7 @@ export default function CompetitionManagement() {
                   <span>Calendario</span>
                 </button>
 
-                {selectedCompetition.type === 'cup' && (
+                {selectedEdition.type === 'cup' && (
                   <button
                     onClick={() => setActiveManagementTab('bracket')}
                     className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -1132,7 +969,7 @@ export default function CompetitionManagement() {
               </div>
             </div>
 
-            {activeManagementTab === 'teams' && selectedCompetition.type === 'league' && (
+            {activeManagementTab === 'teams' && selectedEdition.type === 'league' && (
               <div>
                 <h4 className="text-lg font-medium mb-4">Squadre</h4>
                 
@@ -1176,7 +1013,7 @@ export default function CompetitionManagement() {
               </div>
             )}
 
-            {activeManagementTab === 'bracket' && selectedCompetition.type === 'cup' && (
+            {activeManagementTab === 'bracket' && selectedEdition.type === 'cup' && (
               renderBracket()
             )}
 
