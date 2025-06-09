@@ -81,7 +81,7 @@ interface Player {
 
 type TabType = 'bracket' | 'calendar' | 'standings' | 'stats';
 
-export default function CompetitionProfile() {
+function CompetitionProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -523,3 +523,5 @@ export default function CompetitionProfile() {
     </div>
   );
 }
+
+export default CompetitionProfile;
