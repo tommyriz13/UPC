@@ -10,12 +10,31 @@ import { useAuth } from '../hooks/useAuth';
 import ChatButton from './ChatButton';
 import KnockoutBracket from './KnockoutBracket';
 
-interface Competition {
+const MATCH_TABLES: Record<CompetitionType, string> = {
+  league: 'matches_league',
+  champions: 'matches_champions',
+  cup: 'matches_cup',
+};
+
+const STANDINGS_TABLES: Record<CompetitionType, string> = {
+  league: 'standings_league',
+  champions: 'standings_champions_groups',
+  cup: '', // Cup doesn't have standings
+};
+
+const STATS_TABLES: Record<CompetitionType, string> = {
+  league: 'stats_league',
+  champions: 'stats_champions',
+  cup: 'stats_cup',
+};
+
+type CompetitionType = 'league' | 'champions' | 'cup';
+
+interface Edition {
   id: string;
   name: string;
-  image_url: string | null;
+  type: CompetitionType;
   status: string;
-  type: 'league' | 'champions' | 'cup';
 }
 
 interface Standing {
@@ -29,6 +48,7 @@ interface Standing {
   goals_against: number;
   goal_difference: number;
   points: number;
+  group_name?: string;
 }
 
 interface Match {
@@ -42,6 +62,8 @@ interface Match {
   approved: boolean;
   round?: number;
   leg?: number;
+  stage?: string;
+  group_name?: string;
   bracket_position?: {
     match_number: number;
     round: number;
@@ -49,24 +71,24 @@ interface Match {
 }
 
 interface Player {
-  id: string;
-  username: string | null;
-  game_id: string | null;
-  total_goals?: number;
-  total_assists?: number;
+  player_id: string;
+  player_name: string | null;
+  team_name: string;
+  goals: number;
+  assists: number;
+  matches_played: number;
 }
 
-type TabType = 'bracket' | 'calendar' | 'stats';
+type TabType = 'bracket' | 'calendar' | 'standings' | 'stats';
 
 export default function CompetitionProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabType>('bracket');
-  const [competition, setCompetition] = useState<Competition | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType>('calendar');
+  const [edition, setEdition] = useState<Edition | null>(null);
   const [standings, setStandings] = useState<Standing[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
-  const [slotTeams, setSlotTeams] = useState<Record<string, { id: string; name: string; logo_url: string | null }>>({});
   const [topScorers, setTopScorers] = useState<Player[]>([]);
   const [topAssists, setTopAssists] = useState<Player[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -76,7 +98,7 @@ export default function CompetitionProfile() {
 
   useEffect(() => {
     if (id) {
-      fetchCompetitionData();
+      fetchEditionData();
     }
   }, [id]);
 
@@ -85,6 +107,14 @@ export default function CompetitionProfile() {
       fetchUserTeam();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (edition?.type === 'cup') {
+      setActiveTab('bracket');
+    } else if (edition?.type === 'league') {
+      setActiveTab('standings');
+    }
+  }, [edition]);
 
   const fetchUserTeam = async () => {
     if (!user) return;
@@ -108,50 +138,21 @@ export default function CompetitionProfile() {
     }
   };
 
-  const fetchCompetitionData = async () => {
+  const fetchEditionData = async () => {
     try {
-      // Fetch competition details
-      const { data: competitionData, error: competitionError } = await supabase
-        .from('competitions')
+      // Fetch edition details
+      const { data: editionData, error: editionError } = await supabase
+        .from('editions')
         .select('*')
         .eq('id', id)
         .single();
 
-      if (competitionError) throw competitionError;
-      setCompetition(competitionData);
+      if (editionError) throw editionError;
+      setEdition(editionData);
 
-      const { data: compData, error: compError } = await supabase
-        .from('competitions')
-        .select('bracket_slots, type')
-        .eq('id', id)
-        .single();
-
-      if (compError) throw compError;
-
-      const slots = compData?.bracket_slots || {};
-      const compType = compData?.type as CompetitionType | undefined;
-      if (Object.keys(slots).length > 0) {
-        const { data: teamsData, error: teamsError } = await supabase
-          .from('teams')
-          .select('id, name, logo_url')
-          .in('id', Object.values(slots));
-
-        if (teamsError) throw teamsError;
-
-        const map: Record<string, { id: string; name: string; logo_url: string | null }> = {};
-        for (const [slotKey, teamId] of Object.entries(slots)) {
-          const team = teamsData?.find(t => t.id === teamId);
-          if (team) map[slotKey] = team;
-        }
-        setSlotTeams(map);
-      } else {
-        setSlotTeams({});
-      }
-
-      // Fetch matches with additional fields for cup competitions
-      const matchTable = compType ? MATCH_TABLES[compType] : MATCH_TABLES['league'];
-      const matchesQuery = supabase
-        .from(matchTable)
+      // Fetch matches
+      const { data: matchesData, error: matchesError } = await supabase
+        .from(MATCH_TABLES[editionData.type])
         .select(`
           id,
           home_team:teams!home_team_id(id, name, logo_url),
@@ -163,33 +164,57 @@ export default function CompetitionProfile() {
           approved,
           round,
           leg,
+          stage,
+          group_name,
           bracket_position
         `)
-        .eq('competition_id', id)
+        .eq('edition_id', id)
         .order('match_day', { ascending: true });
 
-      const { data: matchesData, error: matchesError } = await matchesQuery;
-
       if (matchesError) throw matchesError;
-
       setMatches(matchesData || []);
 
-      // Fetch top scorers
-      const { data: scorersData, error: scorersError } = await supabase
-        .rpc('get_top_scorers', { limit_count: 10 });
+      // Fetch standings if applicable
+      if (STANDINGS_TABLES[editionData.type]) {
+        const { data: standingsData, error: standingsError } = await supabase
+          .from(STANDINGS_TABLES[editionData.type])
+          .select('*')
+          .eq('edition_id', id)
+          .order('points', { ascending: false });
 
-      if (scorersError) throw scorersError;
-      setTopScorers(scorersData || []);
+        if (standingsError) throw standingsError;
+        setStandings(standingsData || []);
+      }
 
-      // Fetch top assists
-      const { data: assistsData, error: assistsError } = await supabase
-        .rpc('get_top_assistmen', { limit_count: 10 });
+      // Fetch stats
+      const { data: statsData, error: statsError } = await supabase
+        .from(STATS_TABLES[editionData.type])
+        .select(`
+          player_id,
+          goals,
+          assists,
+          matches_played,
+          profiles!player_id(username, game_id),
+          teams!team_id(name)
+        `)
+        .eq('edition_id', id);
 
-      if (assistsError) throw assistsError;
-      setTopAssists(assistsData || []);
+      if (statsError) throw statsError;
+
+      const formattedStats = (statsData || []).map((stat: any) => ({
+        player_id: stat.player_id,
+        player_name: stat.profiles?.username || stat.profiles?.game_id,
+        team_name: stat.teams?.name,
+        goals: stat.goals,
+        assists: stat.assists,
+        matches_played: stat.matches_played,
+      }));
+
+      setTopScorers(formattedStats.filter(s => s.goals > 0).sort((a, b) => b.goals - a.goals).slice(0, 10));
+      setTopAssists(formattedStats.filter(s => s.assists > 0).sort((a, b) => b.assists - a.assists).slice(0, 10));
 
     } catch (error) {
-      console.error('Error fetching competition data:', error);
+      console.error('Error fetching edition data:', error);
       toast.error('Errore nel caricamento della competizione');
     } finally {
       setIsLoading(false);
@@ -197,7 +222,7 @@ export default function CompetitionProfile() {
   };
 
   const handleSubmitResult = async () => {
-    await fetchCompetitionData();
+    await fetchEditionData();
     setIsResultFormOpen(false);
     setSelectedMatch(null);
   };
@@ -220,7 +245,7 @@ export default function CompetitionProfile() {
     );
   }
 
-  if (!competition) {
+  if (!edition) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center">
@@ -235,23 +260,15 @@ export default function CompetitionProfile() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center space-x-4">
-          {competition.image_url ? (
-            <img
-              src={competition.image_url}
-              alt={competition.name}
-              className="w-16 h-16 rounded-lg object-cover"
-            />
-          ) : (
-            <div className="w-16 h-16 bg-gray-800 rounded-lg flex items-center justify-center">
-              <Trophy size={32} className="text-red-500" />
-            </div>
-          )}
+          <div className="w-16 h-16 bg-gray-800 rounded-lg flex items-center justify-center">
+            <Trophy size={32} className="text-red-500" />
+          </div>
           <div>
-            <h1 className="text-3xl font-bold">{competition.name}</h1>
+            <h1 className="text-3xl font-bold">{edition.name}</h1>
             <span className="text-gray-400">
-              {competition.status === 'in_corso' ? 'In Corso' : 
-               competition.status === 'completata' ? 'Completata' : 
-               'In Arrivo'}
+              {edition.type === 'league' ? 'Campionato' : 
+               edition.type === 'champions' ? 'Champions League' : 
+               'Coppa'}
             </span>
           </div>
         </div>
@@ -259,7 +276,7 @@ export default function CompetitionProfile() {
 
       {/* Navigation Tabs */}
       <div className="flex space-x-4 mb-8">
-        {competition.type === 'cup' && (
+        {edition.type === 'cup' && (
           <button
             onClick={() => setActiveTab('bracket')}
             className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -279,6 +296,17 @@ export default function CompetitionProfile() {
           <Calendar size={20} />
           <span>Calendario</span>
         </button>
+        {edition.type !== 'cup' && (
+          <button
+            onClick={() => setActiveTab('standings')}
+            className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
+              activeTab === 'standings' ? 'bg-red-600' : 'bg-gray-800 hover:bg-gray-700'
+            }`}
+          >
+            <Trophy size={20} />
+            <span>Classifica</span>
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('stats')}
           className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -292,15 +320,58 @@ export default function CompetitionProfile() {
 
       {/* Content */}
       <div className="bg-gray-800 rounded-lg p-6">
-        {activeTab === 'bracket' && competition.type === 'cup' && (
+        {activeTab === 'bracket' && edition.type === 'cup' && (
           <KnockoutBracket matches={matches} />
+        )}
+
+        {activeTab === 'standings' && edition.type !== 'cup' && (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-700">
+                  <th className="text-left py-3 px-4">Pos</th>
+                  <th className="text-left py-3 px-4">Squadra</th>
+                  {edition.type === 'champions' && <th className="text-left py-3 px-4">Gruppo</th>}
+                  <th className="text-center py-3 px-4">G</th>
+                  <th className="text-center py-3 px-4">V</th>
+                  <th className="text-center py-3 px-4">N</th>
+                  <th className="text-center py-3 px-4">P</th>
+                  <th className="text-center py-3 px-4">GF</th>
+                  <th className="text-center py-3 px-4">GS</th>
+                  <th className="text-center py-3 px-4">DR</th>
+                  <th className="text-center py-3 px-4">Pt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {standings.map((standing, index) => (
+                  <tr key={standing.team_id} className="border-b border-gray-700 hover:bg-gray-700">
+                    <td className="py-3 px-4">{index + 1}</td>
+                    <td className="py-3 px-4 font-medium">{standing.team_name}</td>
+                    {edition.type === 'champions' && <td className="py-3 px-4">{standing.group_name}</td>}
+                    <td className="text-center py-3 px-4">{standing.played}</td>
+                    <td className="text-center py-3 px-4">{standing.won}</td>
+                    <td className="text-center py-3 px-4">{standing.drawn}</td>
+                    <td className="text-center py-3 px-4">{standing.lost}</td>
+                    <td className="text-center py-3 px-4">{standing.goals_for}</td>
+                    <td className="text-center py-3 px-4">{standing.goals_against}</td>
+                    <td className="text-center py-3 px-4">{standing.goal_difference}</td>
+                    <td className="text-center py-3 px-4 font-bold">{standing.points}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {activeTab === 'calendar' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {Array.from(new Set(matches.map(m => m.match_day))).map(matchDay => (
               <div key={matchDay} className="bg-gray-700 rounded-lg p-4">
-                <h3 className="font-medium text-gray-400 mb-3">Giornata {matchDay}</h3>
+                <h3 className="font-medium text-gray-400 mb-3">
+                  {edition.type === 'league' ? `Giornata ${matchDay}` : 
+                   edition.type === 'champions' ? `Giornata ${matchDay}` :
+                   `Turno ${matchDay}`}
+                </h3>
                 <div className="space-y-3">
                   {matches
                     .filter(m => m.match_day === matchDay)
@@ -392,18 +463,16 @@ export default function CompetitionProfile() {
               <h3 className="text-xl font-semibold mb-4">Marcatori</h3>
               <div className="space-y-2">
                 {topScorers.map((player, index) => (
-                  <div key={player.id} className="bg-gray-700 rounded-lg p-3 flex justify-between items-center">
+                  <div key={player.player_id} className="bg-gray-700 rounded-lg p-3 flex justify-between items-center">
                     <button
-                      onClick={() => navigate(`/player/${player.id}`)}
+                      onClick={() => navigate(`/player/${player.player_id}`)}
                       className="hover:text-red-500 transition-colors text-left"
                     >
-                      <span className="font-medium">{player.username || player.game_id}</span>
-                      {player.game_id && player.username && (
-                        <span className="text-sm text-gray-400 ml-2">({player.game_id})</span>
-                      )}
+                      <span className="font-medium">{player.player_name}</span>
+                      <div className="text-sm text-gray-400">{player.team_name}</div>
                     </button>
                     <div className="bg-gray-600 px-3 py-1 rounded-full text-sm">
-                      {player.total_goals} gol
+                      {player.goals} gol
                     </div>
                   </div>
                 ))}
@@ -414,18 +483,16 @@ export default function CompetitionProfile() {
               <h3 className="text-xl font-semibold mb-4">Assistman</h3>
               <div className="space-y-2">
                 {topAssists.map((player, index) => (
-                  <div key={player.id} className="bg-gray-700 rounded-lg p-3 flex justify-between items-center">
+                  <div key={player.player_id} className="bg-gray-700 rounded-lg p-3 flex justify-between items-center">
                     <button
-                      onClick={() => navigate(`/player/${player.id}`)}
+                      onClick={() => navigate(`/player/${player.player_id}`)}
                       className="hover:text-red-500 transition-colors text-left"
                     >
-                      <span className="font-medium">{player.username || player.game_id}</span>
-                      {player.game_id && player.username && (
-                        <span className="text-sm text-gray-400 ml-2">({player.game_id})</span>
-                      )}
+                      <span className="font-medium">{player.player_name}</span>
+                      <div className="text-sm text-gray-400">{player.team_name}</div>
                     </button>
                     <div className="bg-gray-600 px-3 py-1 rounded-full text-sm">
-                      {player.total_assists} assist
+                      {player.assists} assist
                     </div>
                   </div>
                 ))}
@@ -456,3 +523,5 @@ export default function CompetitionProfile() {
     </div>
   );
 }
+
+export default CompetitionProfile
