@@ -523,5 +523,3 @@ export default function CompetitionProfile() {
     </div>
   );
 }
-
-export default CompetitionProfile
