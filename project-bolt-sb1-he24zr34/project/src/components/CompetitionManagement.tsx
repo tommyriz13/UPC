@@ -125,7 +125,7 @@ export default function CompetitionManagement() {
 
   useEffect(() => {
     if (selectedEdition?.type === 'cup') {
-      setActiveManagementTab('teams');
+      setActiveManagementTab('bracket');
       fetchBracketTeams();
     }
   }, [selectedEdition]);
@@ -169,28 +169,83 @@ export default function CompetitionManagement() {
 
   const fetchPendingResults = async (editionId: string, type: CompetitionType) => {
     try {
-      const { data, error } = await supabase
+      // First get matches with their results
+      const { data: matchData, error: matchError } = await supabase
         .from(MATCH_TABLES[type])
-        .select(
-          `id,
-          home_team:teams!home_team_id(name),
-          away_team:teams!away_team_id(name),
+        .select(`
+          id,
+          home_team_id,
+          away_team_id,
           scheduled_for,
           match_day,
-          approved,
-          match_results(id, team_id, teams(name))`
-        )
+          approved
+        `)
         .eq('edition_id', editionId)
-        .order('match_day');
+        .eq('approved', false);
 
-      if (error) throw error;
+      if (matchError) throw matchError;
 
-      const pending = (data || []).filter(
-        (m: any) => !m.approved && m.match_results && m.match_results.length > 0
-      );
+      if (!matchData || matchData.length === 0) {
+        setPendingResults([]);
+        return;
+      }
+
+      // Get team names
+      const teamIds = [...new Set([
+        ...matchData.map(m => m.home_team_id),
+        ...matchData.map(m => m.away_team_id)
+      ])];
+
+      const { data: teamData, error: teamError } = await supabase
+        .from('teams')
+        .select('id, name')
+        .in('id', teamIds);
+
+      if (teamError) throw teamError;
+
+      const teamMap = new Map(teamData?.map(t => [t.id, t.name]) || []);
+
+      // Get match results for these matches
+      const { data: resultData, error: resultError } = await supabase
+        .from('match_results')
+        .select('id, match_id, team_id')
+        .in('match_id', matchData.map(m => m.id));
+
+      if (resultError) throw resultError;
+
+      const resultMap = new Map<string, any[]>();
+      resultData?.forEach(result => {
+        if (!resultMap.has(result.match_id)) {
+          resultMap.set(result.match_id, []);
+        }
+        resultMap.get(result.match_id)?.push({
+          id: result.id,
+          team_id: result.team_id,
+          teams: { name: teamMap.get(result.team_id) || 'Unknown' }
+        });
+      });
+
+      // Transform matches with results
+      const pending = matchData
+        .filter(match => resultMap.has(match.id) && resultMap.get(match.id)!.length > 0)
+        .map(match => ({
+          id: match.id,
+          home_team: { name: teamMap.get(match.home_team_id) || 'Unknown' },
+          away_team: { name: teamMap.get(match.away_team_id) || 'Unknown' },
+          home_score: null,
+          away_score: null,
+          scheduled_for: match.scheduled_for,
+          match_day: match.match_day,
+          home_team_id: match.home_team_id,
+          away_team_id: match.away_team_id,
+          approved: match.approved,
+          match_results: resultMap.get(match.id) || []
+        }));
+
       setPendingResults(pending);
     } catch (err) {
       console.error('Error fetching pending results:', err);
+      setPendingResults([]);
     }
   };
 
@@ -347,19 +402,25 @@ export default function CompetitionManagement() {
         toast.error('Please enter an edition name');
         return;
       }
+      if (formData.type === 'league') {
+        // For league, create directly without team selection
+        handleCreateEdition(new Event('submit') as any);
+        return;
+      }
       setCreateStep(2);
     }
   };
 
   const handleRandomizeBracket = () => {
-    const shuffledTeams = [...selectedTeams].sort(() => Math.random() - 0.5);
+    const shuffledTeams = [...allTeams.map(t => t.id)].sort(() => Math.random() - 0.5);
     const newBracket: {[key: string]: string} = {};
     
-    shuffledTeams.forEach((teamId, index) => {
+    shuffledTeams.slice(0, formData.teamCount).forEach((teamId, index) => {
       newBracket[`slot_${index + 1}`] = teamId;
     });
     
     setBracketTeams(newBracket);
+    setSelectedTeams(shuffledTeams.slice(0, formData.teamCount));
   };
 
   const handleAssignTeam = (slotId: string, teamId: string) => {
@@ -411,13 +472,30 @@ export default function CompetitionManagement() {
             leg: 1,
             bracket_position: { match_number: matchNumber, round: 1 }
           })
-          .select(
-            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
-          )
+          .select()
           .single();
 
         if (firstError) throw firstError;
-        createdMatches.push({ ...(firstLeg as Match) });
+
+        // Get team names for display
+        const { data: homeTeam } = await supabase.from('teams').select('name').eq('id', homeTeamId).single();
+        const { data: awayTeam } = await supabase.from('teams').select('name').eq('id', awayTeamId).single();
+
+        createdMatches.push({
+          id: firstLeg.id,
+          home_team: { name: homeTeam?.name || 'Unknown' },
+          away_team: { name: awayTeam?.name || 'Unknown' },
+          home_score: firstLeg.home_score,
+          away_score: firstLeg.away_score,
+          scheduled_for: firstLeg.scheduled_for,
+          match_day: firstLeg.match_day,
+          approved: firstLeg.approved,
+          home_team_id: firstLeg.home_team_id,
+          away_team_id: firstLeg.away_team_id,
+          round: firstLeg.round,
+          leg: firstLeg.leg,
+          bracket_position: firstLeg.bracket_position
+        });
 
         // second leg
         const { data: secondLeg, error: secondError } = await supabase
@@ -433,14 +511,26 @@ export default function CompetitionManagement() {
             leg: 2,
             bracket_position: { match_number: matchNumber, round: 1 }
           })
-          .select(
-            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, approved, home_team_id, away_team_id, round, leg, bracket_position`
-          )
+          .select()
           .single();
 
         if (secondError) throw secondError;
 
-        createdMatches.push({ ...(secondLeg as Match) });
+        createdMatches.push({
+          id: secondLeg.id,
+          home_team: { name: awayTeam?.name || 'Unknown' },
+          away_team: { name: homeTeam?.name || 'Unknown' },
+          home_score: secondLeg.home_score,
+          away_score: secondLeg.away_score,
+          scheduled_for: secondLeg.scheduled_for,
+          match_day: secondLeg.match_day,
+          approved: secondLeg.approved,
+          home_team_id: secondLeg.home_team_id,
+          away_team_id: secondLeg.away_team_id,
+          round: secondLeg.round,
+          leg: secondLeg.leg,
+          bracket_position: secondLeg.bracket_position
+        });
       }
 
       if (createdMatches.length > 0) {
@@ -516,15 +606,23 @@ export default function CompetitionManagement() {
             match_day: newMatch.matchDay,
           })
           .eq('id', editingMatch.id)
-          .select(
-            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
-          )
+          .select()
           .single();
 
         if (error) throw error;
 
+        // Get team names for display
+        const { data: homeTeam } = await supabase.from('teams').select('name').eq('id', data.home_team_id).single();
+        const { data: awayTeam } = await supabase.from('teams').select('name').eq('id', data.away_team_id).single();
+
+        const updatedMatch = {
+          ...data,
+          home_team: { name: homeTeam?.name || 'Unknown' },
+          away_team: { name: awayTeam?.name || 'Unknown' }
+        };
+
         setMatches(prev =>
-          prev.map(m => (m.id === editingMatch.id ? (data as Match) : m))
+          prev.map(m => (m.id === editingMatch.id ? updatedMatch : m))
         );
         toast.success('Partita aggiornata');
       } else {
@@ -538,14 +636,22 @@ export default function CompetitionManagement() {
             scheduled_for: iso,
             status: 'scheduled',
           })
-          .select(
-            `id, home_team:teams!home_team_id(name), away_team:teams!away_team_id(name), home_score, away_score, scheduled_for, match_day, home_team_id, away_team_id`
-          )
+          .select()
           .single();
 
         if (error) throw error;
 
-        setMatches(prev => [...prev, data as Match]);
+        // Get team names for display
+        const { data: homeTeam } = await supabase.from('teams').select('name').eq('id', data.home_team_id).single();
+        const { data: awayTeam } = await supabase.from('teams').select('name').eq('id', data.away_team_id).single();
+
+        const newMatchData = {
+          ...data,
+          home_team: { name: homeTeam?.name || 'Unknown' },
+          away_team: { name: awayTeam?.name || 'Unknown' }
+        };
+
+        setMatches(prev => [...prev, newMatchData]);
         toast.success('Partita aggiunta');
       }
 
@@ -561,8 +667,7 @@ export default function CompetitionManagement() {
   const renderBracket = () => {
     if (!selectedEdition) return null;
 
-    const rounds = Math.log2(selectedTeams.length);
-    const totalSlots = selectedTeams.length;
+    const totalSlots = formData.teamCount;
 
     return (
       <div className="space-y-6">
@@ -598,19 +703,15 @@ export default function CompetitionManagement() {
                   className="bg-gray-600 rounded px-3 py-1"
                 >
                   <option value="">Select Team</option>
-                  {selectedTeams.map(teamId => {
-                    const team = allTeams.find(t => t.id === teamId);
-                    if (!team) return null;
-                    return (
-                      <option 
-                        key={team.id} 
-                        value={team.id}
-                        disabled={Object.values(bracketTeams).includes(team.id) && bracketTeams[`slot_${i + 1}`] !== team.id}
-                      >
-                        {team.name}
-                      </option>
-                    );
-                  })}
+                  {allTeams.map(team => (
+                    <option 
+                      key={team.id} 
+                      value={team.id}
+                      disabled={Object.values(bracketTeams).includes(team.id) && bracketTeams[`slot_${i + 1}`] !== team.id}
+                    >
+                      {team.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -925,15 +1026,15 @@ export default function CompetitionManagement() {
 
             <div className="mb-6">
               <div className="flex space-x-4">
-                {selectedEdition.type === 'league' && (
+                {selectedEdition.type === 'cup' && (
                   <button
-                    onClick={() => setActiveManagementTab('teams')}
+                    onClick={() => setActiveManagementTab('bracket')}
                     className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                      activeManagementTab === 'teams' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                      activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
                     }`}
                   >
-                    <Users2 size={20} />
-                    <span>Squadre</span>
+                    <Settings size={20} />
+                    <span>Bracket</span>
                   </button>
                 )}
 
@@ -947,18 +1048,6 @@ export default function CompetitionManagement() {
                   <span>Calendario</span>
                 </button>
 
-                {selectedEdition.type === 'cup' && (
-                  <button
-                    onClick={() => setActiveManagementTab('bracket')}
-                    className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
-                      activeManagementTab === 'bracket' ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                    } ml-2`}
-                  >
-                    <Settings size={20} />
-                    <span>Bracket</span>
-                  </button>
-                )}
-
                 <button
                   onClick={() => setActiveManagementTab('results')}
                   className={`px-4 py-2 rounded-lg flex items-center space-x-2 ${
@@ -970,50 +1059,6 @@ export default function CompetitionManagement() {
                 </button>
               </div>
             </div>
-
-            {activeManagementTab === 'teams' && selectedEdition.type === 'league' && (
-              <div>
-                <h4 className="text-lg font-medium mb-4">Squadre</h4>
-                
-                <div className="relative mb-4">
-                  <input
-                    type="text"
-                    placeholder="Cerca squadra..."
-                    value={teamSearchTerm}
-                    onChange={(e) => setTeamSearchTerm(e.target.value)}
-                    className="w-full bg-gray-700 rounded-lg pl-10 pr-4 py-2 text-white"
-                  />
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
-                </div>
-
-                <div className="space-y-2">
-                  {allTeams
-                    .filter(team => 
-                      team.name.toLowerCase().includes(teamSearchTerm.toLowerCase())
-                    )
-                    .map(team => (
-                      <div
-                        key={team.id}
-                        className="flex items-center justify-between bg-gray-700 rounded-lg p-3"
-                      >
-                        <span>{team.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleTeamToggle(team.id)}
-                          className={`px-3 py-1 rounded ${
-                            selectedTeams.includes(team.id)
-                              ? 'bg-red-600 hover:bg-red-700'
-                              : 'bg-gray-600 hover:bg-gray-500'
-                          }`}
-                        >
-                          {selectedTeams.includes(team.id) ? 'Remove' : 'Add'}
-                        </button>
-                      </div>
-                    ))
-                  }
-                </div>
-              </div>
-            )}
 
             {activeManagementTab === 'bracket' && selectedEdition.type === 'cup' && (
               renderBracket()
@@ -1036,14 +1081,11 @@ export default function CompetitionManagement() {
                       className="bg-gray-700 rounded px-2 py-1"
                     >
                       <option value="">Squadra Casa</option>
-                      {selectedTeams.map(tid => {
-                        const team = allTeams.find(t => t.id === tid);
-                        return team ? (
-                          <option key={team.id} value={team.id} disabled={team.id === newMatch.awayTeamId}>
-                            {team.name}
-                          </option>
-                        ) : null;
-                      })}
+                      {allTeams.map(team => (
+                        <option key={team.id} value={team.id} disabled={team.id === newMatch.awayTeamId}>
+                          {team.name}
+                        </option>
+                      ))}
                     </select>
                     <select
                       value={newMatch.awayTeamId}
@@ -1051,14 +1093,11 @@ export default function CompetitionManagement() {
                       className="bg-gray-700 rounded px-2 py-1"
                     >
                       <option value="">Squadra Trasferta</option>
-                      {selectedTeams.map(tid => {
-                        const team = allTeams.find(t => t.id === tid);
-                        return team ? (
-                          <option key={team.id} value={team.id} disabled={team.id === newMatch.homeTeamId}>
-                            {team.name}
-                          </option>
-                        ) : null;
-                      })}
+                      {allTeams.map(team => (
+                        <option key={team.id} value={team.id} disabled={team.id === newMatch.homeTeamId}>
+                          {team.name}
+                        </option>
+                      ))}
                     </select>
                     <input
                       type="number"
@@ -1091,7 +1130,7 @@ export default function CompetitionManagement() {
               </div>
             )}
 
-            {activeManagementTab === 'results' && (
+            {activeManagementTab === 'results'&& (
               <div>
                 <h4 className="text-lg font-medium mb-4">Risultati</h4>
                 {pendingResults.length === 0 ? (

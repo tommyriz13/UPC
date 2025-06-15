@@ -111,64 +111,122 @@ export default function VerificationGame() {
     try {
       const matchTable = `matches_${type}`;
       
-      const { data, error } = await supabase
+      // First get the match details
+      const { data: matchData, error: matchError } = await supabase
         .from(matchTable)
         .select(`
           id,
           edition_id,
           home_team_id,
           away_team_id,
-          home_team:teams!home_team_id(name),
-          away_team:teams!away_team_id(name),
+          home_score,
+          away_score,
           scheduled_for,
           match_day,
           approved,
-          match_results!inner (
-            id,
-            team_id,
-            teams (
-              name
-            ),
-            home_score,
-            away_score,
-            status,
-            created_at
-          ),
-          match_lineups (
-            id,
-            team_id,
-            formation,
-            player_positions
-          ),
-          match_proofs (
-            id,
-            team_id,
-            player_list_url,
-            result_url,
-            stats_url,
-            stream_url
-          ),
-          match_player_stats (
-            id,
-            player_id,
-            team_id,
-            goals,
-            assists,
-            player:profiles!match_player_stats_player_profiles_fkey (
-              username,
-              game_id
-            )
-          )
+          ${type === 'cup' ? 'round, leg, bracket_position,' : ''}
+          ${type === 'champions' ? 'stage, group_name,' : ''}
+          status
         `)
         .eq('id', id)
         .single();
 
-      if (error) throw error;
+      if (matchError) throw matchError;
+
+      // Get team names
+      const { data: homeTeam, error: homeTeamError } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', matchData.home_team_id)
+        .single();
+
+      if (homeTeamError) throw homeTeamError;
+
+      const { data: awayTeam, error: awayTeamError } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', matchData.away_team_id)
+        .single();
+
+      if (awayTeamError) throw awayTeamError;
+
+      // Get match results
+      const { data: resultsData, error: resultsError } = await supabase
+        .from('match_results')
+        .select(`
+          id,
+          team_id,
+          home_score,
+          away_score,
+          status,
+          created_at,
+          teams:team_id(name)
+        `)
+        .eq('match_id', id);
+
+      if (resultsError) throw resultsError;
+
+      // Get match lineups
+      const { data: lineupsData, error: lineupsError } = await supabase
+        .from('match_lineups')
+        .select(`
+          id,
+          team_id,
+          formation,
+          player_positions
+        `)
+        .eq('match_id', id);
+
+      if (lineupsError) throw lineupsError;
+
+      // Get match proofs
+      const { data: proofsData, error: proofsError } = await supabase
+        .from('match_proofs')
+        .select(`
+          id,
+          team_id,
+          player_list_url,
+          result_url,
+          stats_url,
+          stream_url
+        `)
+        .eq('match_id', id);
+
+      if (proofsError) throw proofsError;
+
+      // Get player stats
+      const { data: statsData, error: statsError } = await supabase
+        .from('match_player_stats')
+        .select(`
+          id,
+          player_id,
+          team_id,
+          goals,
+          assists,
+          player:profiles!match_player_stats_player_profiles_fkey(
+            username,
+            game_id
+          )
+        `)
+        .eq('match_id', id);
+
+      if (statsError) throw statsError;
+
+      // Combine all data
+      const fullMatchData = {
+        ...matchData,
+        home_team: { name: homeTeam.name },
+        away_team: { name: awayTeam.name },
+        match_results: resultsData || [],
+        match_lineups: lineupsData || [],
+        match_proofs: proofsData || [],
+        match_player_stats: statsData || []
+      };
 
       // Fetch player names for lineup positions
-      if (data?.match_lineups) {
+      if (fullMatchData.match_lineups) {
         const playerIds = new Set<string>();
-        data.match_lineups.forEach((lineup: any) => {
+        fullMatchData.match_lineups.forEach((lineup: any) => {
           Object.values(lineup.player_positions || {}).forEach((playerId: any) => {
             if (playerId) playerIds.add(playerId);
           });
@@ -190,14 +248,15 @@ export default function VerificationGame() {
         }
       }
 
-      if (data?.match_player_stats) {
+      if (fullMatchData.match_player_stats) {
         const statsMap: { [key: string]: { goals: number; assists: number } } = {};
-        data.match_player_stats.forEach((s: any) => {
+        fullMatchData.match_player_stats.forEach((s: any) => {
           statsMap[s.id] = { goals: s.goals, assists: s.assists };
         });
         setEditedStats(statsMap);
       }
-      setMatch(data);
+      
+      setMatch(fullMatchData);
     } catch (error) {
       console.error('Error fetching match data:', error);
       toast.error('Error loading match data');
@@ -259,11 +318,6 @@ export default function VerificationGame() {
 
       if (approveMatchError) throw approveMatchError;
 
-      // If this is a cup match, check if we need to advance to next round
-      if (matchType === 'cup') {
-        await advanceKnockoutRounds(editionId);
-      }
-
       toast.success('Match result approved successfully');
       navigate('/admin');
     } catch (error) {
@@ -276,137 +330,6 @@ export default function VerificationGame() {
 
   const handleScoreEdit = (homeScore: number, awayScore: number) => {
     setEditedScores({ homeScore, awayScore });
-  };
-
-  const advanceKnockoutRounds = async (competitionId: string) => {
-    try {
-      const { data: teamData, error: teamError } = await supabase
-        .from('teams')
-        .select('id')
-        .limit(100);
-
-      if (teamError) throw teamError;
-
-      const teamIds = teamData?.map(t => t.id) || [];
-      const totalRounds = Math.log2(teamIds.length);
-
-      const { data, error } = await supabase
-        .from('matches_cup')
-        .select('id, home_team_id, away_team_id, home_score, away_score, approved, round, leg, bracket_position')
-        .eq('edition_id', competitionId);
-
-      if (error) throw error;
-
-      const current: any[] = (data || []);
-
-      for (let round = 1; round < totalRounds; round++) {
-        const roundMatches = current.filter(m => m.round === round);
-        const groups: { [key: number]: any[] } = {};
-        roundMatches.forEach(m => {
-          const num = m.bracket_position?.match_number || 0;
-          groups[num] = groups[num] ? [...groups[num], m] : [m];
-        });
-
-        const groupNumbers = Object.keys(groups).map(n => parseInt(n, 10)).sort((a, b) => a - b);
-        if (groupNumbers.length === 0) continue;
-
-        const winners: string[] = [];
-        for (const num of groupNumbers) {
-          const legs = groups[num];
-          if (!legs.every(l => l.approved)) {
-            winners.length = 0;
-            break;
-          }
-
-          const leg1 = legs.find(l => l.leg === 1)!;
-          const leg2 = legs.find(l => l.leg === 2);
-          const total1 = (leg1.home_score || 0) + (leg2 ? leg2.away_score || 0 : 0);
-          const total2 = (leg1.away_score || 0) + (leg2 ? leg2.home_score || 0 : 0);
-          const winner = total1 >= total2 ? leg1.home_team_id : leg1.away_team_id;
-          winners.push(winner);
-        }
-
-        if (winners.length === 0) continue;
-
-        for (let i = 0; i < winners.length; i += 2) {
-          const w1 = winners[i];
-          const w2 = winners[i + 1];
-          if (!w1 || !w2) continue;
-
-          const matchNumber = Math.floor(i / 2) + 1;
-          const exists = current.find(
-            mm => mm.round === round + 1 &&
-              mm.bracket_position?.match_number === matchNumber &&
-              mm.leg === 1
-          );
-          if (exists) continue;
-
-          const { data: firstLeg, error: firstErr } = await supabase
-            .from('matches_cup')
-            .insert({
-              edition_id: competitionId,
-              home_team_id: w1,
-              away_team_id: w2,
-              match_day: round * 2 + 1,
-              scheduled_for: UNSCHEDULED_DATE,
-              status: 'scheduled',
-              round: round + 1,
-              leg: 1,
-              bracket_position: { match_number: matchNumber, round: round + 1 }
-            })
-            .select('id')
-            .single();
-
-          if (firstErr || !firstLeg) continue;
-
-          current.push({
-            id: firstLeg.id,
-            home_team_id: w1,
-            away_team_id: w2,
-            home_score: null,
-            away_score: null,
-            approved: false,
-            round: round + 1,
-            leg: 1,
-            bracket_position: { match_number: matchNumber, round: round + 1 },
-          });
-
-          if (round + 1 !== totalRounds) {
-            const { data: secondLeg, error: secondErr } = await supabase
-              .from('matches_cup')
-              .insert({
-                edition_id: competitionId,
-                home_team_id: w2,
-                away_team_id: w1,
-                match_day: round * 2 + 2,
-                scheduled_for: UNSCHEDULED_DATE,
-                status: 'scheduled',
-                round: round + 1,
-                leg: 2,
-                bracket_position: { match_number: matchNumber, round: round + 1 }
-              })
-              .select('id')
-              .single();
-
-            if (!secondErr && secondLeg) {
-              current.push({
-                id: secondLeg.id,
-                home_team_id: w2,
-                away_team_id: w1,
-                home_score: null,
-                away_score: null,
-                approved: false,
-                round: round + 1,
-                leg: 2,
-                bracket_position: { match_number: matchNumber, round: round + 1 },
-              });
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error advancing knockout rounds', err);
-    }
   };
 
   const checkResultConsistency = (match: any) => {
