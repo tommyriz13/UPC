@@ -150,29 +150,33 @@ export default function CompetitionProfile() {
       if (editionError) throw editionError;
       setEdition(editionData);
 
-      // Fetch matches
+      // Fetch matches using the new function
       const { data: matchesData, error: matchesError } = await supabase
-        .from(MATCH_TABLES[editionData.type])
-        .select(`
-          id,
-          home_team:teams!home_team_id(id, name, logo_url),
-          away_team:teams!away_team_id(id, name, logo_url),
-          home_score,
-          away_score,
-          scheduled_for,
-          match_day,
-          approved,
-          round,
-          leg,
-          stage,
-          group_name,
-          bracket_position
-        `)
-        .eq('edition_id', id)
-        .order('match_day', { ascending: true });
+        .rpc('get_edition_matches', {
+          p_edition_id: id,
+          p_edition_type: editionData.type
+        });
 
       if (matchesError) throw matchesError;
-      setMatches(matchesData || []);
+
+      // Transform the data to match our interface
+      const transformedMatches = (matchesData || []).map((match: any) => ({
+        id: match.id,
+        home_team: { id: match.home_team_id, name: match.home_team_name, logo_url: null },
+        away_team: { id: match.away_team_id, name: match.away_team_name, logo_url: null },
+        home_score: match.home_score,
+        away_score: match.away_score,
+        scheduled_for: match.scheduled_for,
+        match_day: match.match_day,
+        approved: match.approved,
+        round: match.round,
+        leg: match.leg,
+        stage: match.stage,
+        group_name: match.group_name,
+        bracket_position: match.bracket_position
+      }));
+
+      setMatches(transformedMatches);
 
       // Fetch standings if applicable
       if (STANDINGS_TABLES[editionData.type]) {
@@ -376,7 +380,7 @@ export default function CompetitionProfile() {
                   {matches
                     .filter(m => m.match_day === matchDay)
                     .map(match => (
-                      <div key={match.id} className="bg-gray-800 rounded-lg p-3">
+                      <div key={match.id} className={`bg-gray-800 rounded-lg p-3 ${match.approved ? 'border-2 border-green-500' : ''}`}>
                         <div className="flex justify-between items-center">
                           <button
                             onClick={() => navigate(`/team/${match.home_team.id}`)}
@@ -427,6 +431,11 @@ export default function CompetitionProfile() {
                             {format(new Date(match.scheduled_for), 'dd MMM yyyy HH:mm', { locale: it })}
                           </span>
                           <div className="flex items-center space-x-2">
+                            {match.approved && (
+                              <span className="text-xs bg-green-600 text-white px-2 py-1 rounded">
+                                Confermato
+                              </span>
+                            )}
                             <ChatButton
                               matchId={match.id}
                               homeTeamId={match.home_team.id}

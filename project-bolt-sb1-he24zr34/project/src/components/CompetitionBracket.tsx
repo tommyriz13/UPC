@@ -44,7 +44,7 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
   };
 
   const renderMatch = (match: BracketMatch) => (
-    <div key={match.id} className="bg-gray-800 rounded-lg p-4 w-64">
+    <div key={match.id} className={`bg-gray-800 rounded-lg p-4 w-64 ${match.approved ? 'border-2 border-green-500' : ''}`}>
       <div className="text-xs text-gray-400 mb-2">
         {format(new Date(match.scheduled_for), 'dd/MM HH:mm', { locale: it })}
       </div>
@@ -119,7 +119,8 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
                 const round = roundIndex + 1;
                 const roundMatches = bracketMatches.filter(m =>
                   m.round === round &&
-                  m.bracket_position!.match_number <= Math.pow(2, maxRound - round)
+                  m.bracket_position!.match_number <= Math.pow(2, maxRound - round) &&
+                  m.leg === 1 // Only show first leg matches
                 );
 
                 return (
@@ -143,7 +144,8 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
                 const round = roundIndex + 1;
                 const roundMatches = bracketMatches.filter(m =>
                   m.round === round &&
-                  m.bracket_position!.match_number > Math.pow(2, maxRound - round)
+                  m.bracket_position!.match_number > Math.pow(2, maxRound - round) &&
+                  m.leg === 1 // Only show first leg matches
                 );
 
                 return (
@@ -167,26 +169,28 @@ export default function CompetitionBracket({ matches, userTeamId, onSubmitResult
             className="absolute inset-0 pointer-events-none"
             style={{ width: '100%', height: '100%' }}
           >
-            {bracketMatches.map(match => {
-              if (match.round === maxRound) return null;
+            {bracketMatches
+              .filter(m => m.leg === 1) // Only use first leg matches for lines
+              .map(match => {
+                if (match.round === maxRound) return null;
 
-              const x1 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '100%' : '0';
-              const x2 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '0' : '100%';
-              const y1 = `${(match.bracket_position!.match_number - 1) * 100 / Math.pow(2, match.round - 1)}%`;
-              const y2 = `${match.bracket_position!.match_number * 100 / Math.pow(2, match.round)}%`;
+                const x1 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '100%' : '0';
+                const x2 = match.bracket_position!.match_number <= Math.pow(2, maxRound - match.round) ? '0' : '100%';
+                const y1 = `${(match.bracket_position!.match_number - 1) * 100 / Math.pow(2, match.round - 1)}%`;
+                const y2 = `${match.bracket_position!.match_number * 100 / Math.pow(2, match.round)}%`;
 
-              return (
-                <line
-                  key={`line-${match.id}`}
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
-                  stroke="#4B5563"
-                  strokeWidth="2"
-                />
-              );
-            })}
+                return (
+                  <line
+                    key={`line-${match.id}`}
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke="#4B5563"
+                    strokeWidth="2"
+                  />
+                );
+              })}
           </svg>
         </div>
       </div>

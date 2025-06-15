@@ -46,6 +46,7 @@ interface Edition {
   name: string;
   type: CompetitionType;
   status: string;
+  bracket_slots?: any;
 }
 
 interface Team {
@@ -287,30 +288,31 @@ export default function CompetitionManagement() {
   const fetchMatches = async (editionId: string, type: CompetitionType) => {
     try {
       const { data, error } = await supabase
-        .from(MATCH_TABLES[type])
-        .select(
-          `id,
-          home_team:teams!home_team_id(name),
-          away_team:teams!away_team_id(name),
-          home_score,
-          away_score,
-          scheduled_for,
-          match_day,
-          approved,
-          home_team_id,
-          away_team_id,
-          round,
-          leg,
-          stage,
-          group_name,
-          bracket_position`
-        )
-        .eq('edition_id', editionId)
-        .order('match_day', { ascending: true });
+        .rpc('get_edition_matches', {
+          p_edition_id: editionId,
+          p_edition_type: type
+        });
 
       if (error) throw error;
 
-      const transformed = (data || []) as Match[];
+      const transformed = (data || []).map((match: any) => ({
+        id: match.id,
+        home_team: { name: match.home_team_name },
+        away_team: { name: match.away_team_name },
+        home_score: match.home_score,
+        away_score: match.away_score,
+        scheduled_for: match.scheduled_for,
+        match_day: match.match_day,
+        approved: match.approved,
+        home_team_id: match.home_team_id,
+        away_team_id: match.away_team_id,
+        round: match.round,
+        leg: match.leg,
+        stage: match.stage,
+        group_name: match.group_name,
+        bracket_position: match.bracket_position
+      }));
+
       setMatches(transformed);
     } catch (error) {
       console.error('Error fetching matches:', error);

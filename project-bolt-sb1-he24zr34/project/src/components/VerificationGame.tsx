@@ -46,20 +46,78 @@ export default function VerificationGame() {
   const [isLoading, setIsLoading] = useState(true);
   const [playerNames, setPlayerNames] = useState<{ [key: string]: string }>({});
   const [editedStats, setEditedStats] = useState<{ [key: string]: { goals: number; assists: number } }>({});
+  const [matchType, setMatchType] = useState<'league' | 'cup' | 'champions'>('league');
+  const [editionId, setEditionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (matchId) {
-      fetchMatchData(matchId);
+      determineMatchType(matchId);
     }
   }, [matchId]);
 
-  const fetchMatchData = async (id: string) => {
+  const determineMatchType = async (id: string) => {
     try {
+      // Try to find the match in each table
+      const { data: leagueMatch, error: leagueError } = await supabase
+        .from('matches_league')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (leagueMatch) {
+        setMatchType('league');
+        setEditionId(leagueMatch.edition_id);
+        fetchMatchData(id, 'league', leagueMatch.edition_id);
+        return;
+      }
+
+      const { data: cupMatch, error: cupError } = await supabase
+        .from('matches_cup')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (cupMatch) {
+        setMatchType('cup');
+        setEditionId(cupMatch.edition_id);
+        fetchMatchData(id, 'cup', cupMatch.edition_id);
+        return;
+      }
+
+      const { data: championsMatch, error: championsError } = await supabase
+        .from('matches_champions')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (championsMatch) {
+        setMatchType('champions');
+        setEditionId(championsMatch.edition_id);
+        fetchMatchData(id, 'champions', championsMatch.edition_id);
+        return;
+      }
+
+      // If we get here, the match wasn't found in any table
+      toast.error('Match not found');
+      navigate('/admin');
+    } catch (error) {
+      console.error('Error determining match type:', error);
+      toast.error('Error loading match data');
+      navigate('/admin');
+    }
+  };
+
+  const fetchMatchData = async (id: string, type: 'league' | 'cup' | 'champions', editionId: string) => {
+    try {
+      const matchTable = `matches_${type}`;
+      
       const { data, error } = await supabase
-        .from('matches')
+        .from(matchTable)
         .select(`
           id,
-          competition_id,
+          edition_id,
+          home_team_id,
+          away_team_id,
           home_team:teams!home_team_id(name),
           away_team:teams!away_team_id(name),
           scheduled_for,
@@ -149,7 +207,7 @@ export default function VerificationGame() {
   };
 
   const handleApprove = async () => {
-    if (!match) return;
+    if (!match || !editionId || !matchType) return;
 
     try {
       setIsLoading(true);
@@ -181,6 +239,7 @@ export default function VerificationGame() {
         if (approveError) throw approveError;
       }
 
+      // Update player stats if edited
       for (const statId of Object.keys(editedStats)) {
         const { goals, assists } = editedStats[statId];
         await supabase
@@ -189,19 +248,22 @@ export default function VerificationGame() {
           .eq('id', statId);
       }
 
-      // Update match status directly
-      const { error: matchError } = await supabase
-        .from('matches')
-        .update({
-          status: 'completed',
-          approved: true,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', match.id);
+      // Call the approve_match_result function to update the match and standings
+      const { error: approveMatchError } = await supabase
+        .rpc('approve_match_result', {
+          p_match_id: match.id,
+          p_edition_type: matchType,
+          p_home_score: editedScores?.homeScore || match.match_results[0].home_score,
+          p_away_score: editedScores?.awayScore || match.match_results[0].away_score
+        });
 
-      if (matchError) throw matchError;
+      if (approveMatchError) throw approveMatchError;
 
-      await advanceKnockoutRounds(match.competition_id);
+      // If this is a cup match, check if we need to advance to next round
+      if (matchType === 'cup') {
+        await advanceKnockoutRounds(editionId);
+      }
+
       toast.success('Match result approved successfully');
       navigate('/admin');
     } catch (error) {
@@ -219,30 +281,23 @@ export default function VerificationGame() {
   const advanceKnockoutRounds = async (competitionId: string) => {
     try {
       const { data: teamData, error: teamError } = await supabase
-        .from('competition_teams')
-        .select('team_id')
-        .eq('competition_id', competitionId);
+        .from('teams')
+        .select('id')
+        .limit(100);
 
       if (teamError) throw teamError;
 
-      const teamIds = teamData?.map(t => t.team_id) || [];
+      const teamIds = teamData?.map(t => t.id) || [];
       const totalRounds = Math.log2(teamIds.length);
 
       const { data, error } = await supabase
-        .from('matches')
-        .select(
-          `id, home_team_id, away_team_id, home_score, away_score, approved, competition_matches(round, leg, bracket_position)`
-        )
-        .eq('competition_id', competitionId);
+        .from('matches_cup')
+        .select('id, home_team_id, away_team_id, home_score, away_score, approved, round, leg, bracket_position')
+        .eq('edition_id', competitionId);
 
       if (error) throw error;
 
-      const current: any[] = (data || []).map(m => ({
-        ...m,
-        round: m.competition_matches[0]?.round,
-        leg: m.competition_matches[0]?.leg,
-        bracket_position: m.competition_matches[0]?.bracket_position,
-      }));
+      const current: any[] = (data || []);
 
       for (let round = 1; round < totalRounds; round++) {
         const roundMatches = current.filter(m => m.round === round);
@@ -287,27 +342,22 @@ export default function VerificationGame() {
           if (exists) continue;
 
           const { data: firstLeg, error: firstErr } = await supabase
-            .from('matches')
+            .from('matches_cup')
             .insert({
-              competition_id: competitionId,
+              edition_id: competitionId,
               home_team_id: w1,
               away_team_id: w2,
               match_day: round * 2 + 1,
               scheduled_for: UNSCHEDULED_DATE,
               status: 'scheduled',
+              round: round + 1,
+              leg: 1,
+              bracket_position: { match_number: matchNumber, round: round + 1 }
             })
             .select('id')
             .single();
 
           if (firstErr || !firstLeg) continue;
-
-          await supabase.from('competition_matches').insert({
-            competition_id: competitionId,
-            match_id: firstLeg.id,
-            round: round + 1,
-            leg: 1,
-            bracket_position: { match_number: matchNumber, round: round + 1 },
-          });
 
           current.push({
             id: firstLeg.id,
@@ -323,27 +373,22 @@ export default function VerificationGame() {
 
           if (round + 1 !== totalRounds) {
             const { data: secondLeg, error: secondErr } = await supabase
-              .from('matches')
+              .from('matches_cup')
               .insert({
-                competition_id: competitionId,
+                edition_id: competitionId,
                 home_team_id: w2,
                 away_team_id: w1,
                 match_day: round * 2 + 2,
                 scheduled_for: UNSCHEDULED_DATE,
                 status: 'scheduled',
+                round: round + 1,
+                leg: 2,
+                bracket_position: { match_number: matchNumber, round: round + 1 }
               })
               .select('id')
               .single();
 
             if (!secondErr && secondLeg) {
-              await supabase.from('competition_matches').insert({
-                competition_id: competitionId,
-                match_id: secondLeg.id,
-                round: round + 1,
-                leg: 2,
-                bracket_position: { match_number: matchNumber, round: round + 1 },
-              });
-
               current.push({
                 id: secondLeg.id,
                 home_team_id: w2,
