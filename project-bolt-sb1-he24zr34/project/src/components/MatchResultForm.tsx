@@ -112,14 +112,18 @@ export default function MatchResultForm({ matchId, teamId, homeTeamName, awayTea
 
   const checkTeamSide = async () => {
     try {
+      // Use the all_matches view to check team side across all competition types
       const { data, error } = await supabase
-        .from('matches')
+        .from('all_matches')
         .select('home_team_id')
         .eq('id', matchId)
-        .single();
+        .maybeSingle(); // Use maybeSingle to handle 0 or 1 results gracefully
 
-      if (error) throw error;
-      setIsHomeTeam(data.home_team_id === teamId);
+      if (error && error.code !== 'PGRST116') throw error;
+      
+      if (data) {
+        setIsHomeTeam(data.home_team_id === teamId);
+      }
     } catch (error) {
       console.error('Error checking team side:', error);
     }
@@ -136,13 +140,13 @@ export default function MatchResultForm({ matchId, teamId, homeTeamName, awayTea
           )
         `)
         .eq('id', teamId)
-        .single();
+        .maybeSingle(); // Use maybeSingle to handle potential multiple results
 
-      if (teamError) throw teamError;
+      if (teamError && teamError.code !== 'PGRST116') throw teamError;
 
       if (teamData) {
         const captain = teamData.captain;
-        const members = teamData.team_members.map((member: any) => member.profiles);
+        const members = teamData.team_members?.map((member: any) => member.profiles) || [];
         
         const allPlayers = [captain, ...members].filter((player, index, self) => 
           player && index === self.findIndex(p => p?.id === player.id)
@@ -265,59 +269,126 @@ export default function MatchResultForm({ matchId, teamId, homeTeamName, awayTea
     
     setIsLoading(true);
     try {
-      // Save lineup
-      const { error: lineupError } = await supabase
+      // Check if lineup already exists and handle accordingly
+      const { data: existingLineup } = await supabase
         .from('match_lineups')
-        .insert({
-          match_id: matchId,
-          team_id: teamId,
-          formation,
-          player_positions: lineup
-        });
+        .select('id')
+        .eq('match_id', matchId)
+        .eq('team_id', teamId)
+        .maybeSingle();
 
-      if (lineupError) throw lineupError;
+      if (existingLineup) {
+        // Update existing lineup
+        const { error: lineupError } = await supabase
+          .from('match_lineups')
+          .update({
+            formation,
+            player_positions: lineup
+          })
+          .eq('id', existingLineup.id);
 
-      // Save proofs
-      const { error: proofsError } = await supabase
+        if (lineupError) throw lineupError;
+      } else {
+        // Insert new lineup
+        const { error: lineupError } = await supabase
+          .from('match_lineups')
+          .insert({
+            match_id: matchId,
+            team_id: teamId,
+            formation,
+            player_positions: lineup
+          });
+
+        if (lineupError) throw lineupError;
+      }
+
+      // Check if proofs already exist and handle accordingly
+      const { data: existingProofs } = await supabase
         .from('match_proofs')
-        .insert({
-          match_id: matchId,
-          team_id: teamId,
-          player_list_url: proofs.playerList,
-          result_url: proofs.result,
-          stats_url: proofs.stats,
-          stream_url: proofs.stream
-        });
+        .select('id')
+        .eq('match_id', matchId)
+        .eq('team_id', teamId)
+        .maybeSingle();
 
-      if (proofsError) throw proofsError;
+      if (existingProofs) {
+        // Update existing proofs
+        const { error: proofsError } = await supabase
+          .from('match_proofs')
+          .update({
+            player_list_url: proofs.playerList,
+            result_url: proofs.result,
+            stats_url: proofs.stats,
+            stream_url: proofs.stream
+          })
+          .eq('id', existingProofs.id);
 
-      // Submit match result
-      const { error: resultError } = await supabase
+        if (proofsError) throw proofsError;
+      } else {
+        // Insert new proofs
+        const { error: proofsError } = await supabase
+          .from('match_proofs')
+          .insert({
+            match_id: matchId,
+            team_id: teamId,
+            player_list_url: proofs.playerList,
+            result_url: proofs.result,
+            stats_url: proofs.stats,
+            stream_url: proofs.stream
+          });
+
+        if (proofsError) throw proofsError;
+      }
+
+      // Check if match result already exists
+      const { data: existingResult } = await supabase
         .from('match_results')
-        .insert({
-          match_id: matchId,
-          team_id: teamId,
-          home_score: homeScore,
-          away_score: awayScore,
-        });
+        .select('id')
+        .eq('match_id', matchId)
+        .eq('team_id', teamId)
+        .maybeSingle();
 
-      if (resultError) throw resultError;
+      if (existingResult) {
+        // Update existing result
+        const { error: resultError } = await supabase
+          .from('match_results')
+          .update({
+            home_score: homeScore,
+            away_score: awayScore,
+          })
+          .eq('id', existingResult.id);
 
-      // Submit player stats
+        if (resultError) throw resultError;
+      } else {
+        // Insert new result
+        const { error: resultError } = await supabase
+          .from('match_results')
+          .insert({
+            match_id: matchId,
+            team_id: teamId,
+            home_score: homeScore,
+            away_score: awayScore,
+          });
+
+        if (resultError) throw resultError;
+      }
+
+      // Handle player stats with upsert logic
       if (playerStats.length > 0) {
-        const { error: statsError } = await supabase
-          .from('match_player_stats')
-          .insert(
-            playerStats.map(stat => ({
+        for (const stat of playerStats) {
+          const { error: statsError } = await supabase
+            .from('match_player_stats')
+            .upsert({
               match_id: matchId,
               team_id: teamId,
               player_id: stat.playerId,
               goals: stat.goals,
               assists: stat.assists,
-            }))
-          );
+            }, {
+              onConflict: 'match_id,player_id'
+            });
 
-        if (statsError) throw statsError;
+          if (statsError) throw statsError;
+        }
       }
 
       toast.success('Risultato inviato con successo!');
