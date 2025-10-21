@@ -1,0 +1,15 @@
+{
+  "name": "upc-league-italia",
+  "version": "1.0.0",
+  "description": "UPC League Italia - Football League Management System",
+  "scripts": {
+    "dev": "cd project-bolt-sb1-he24zr34/project && npm run dev",
+    "build": "cd project-bolt-sb1-he24zr34/project && npm run build",
+    "preview": "cd project-bolt-sb1-he24zr34/project && npm run preview",
+    "lint": "cd project-bolt-sb1-he24zr34/project && npm run lint",
+    "install-deps": "cd project-bolt-sb1-he24zr34/project && npm install"
+  },
+  "keywords": ["football", "league", "management", "react", "typescript"],
+  "author": "UPC League Italia",
+  "license": "MIT"
+}

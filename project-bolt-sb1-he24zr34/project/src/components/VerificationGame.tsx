@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 
 type VerificationStep = 'lineups' | 'results' | 'stats' | 'stream' | 'confirm';
 
+const UNSCHEDULED_DATE = new Date('2025-01-01T00:00:00Z').toISOString();
+
 const positionLabels: { [key: string]: string } = {
   'POR': 'Portiere',
   'TD': 'Terzino Destro',
@@ -43,70 +45,188 @@ export default function VerificationGame() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [playerNames, setPlayerNames] = useState<{ [key: string]: string }>({});
+  const [editedStats, setEditedStats] = useState<{ [key: string]: { goals: number; assists: number } }>({});
+  const [matchType, setMatchType] = useState<'league' | 'cup' | 'champions'>('league');
+  const [editionId, setEditionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (matchId) {
-      fetchMatchData(matchId);
+      determineMatchType(matchId);
     }
   }, [matchId]);
 
-  const fetchMatchData = async (id: string) => {
+  const determineMatchType = async (id: string) => {
     try {
-      const { data, error } = await supabase
-        .from('matches')
+      // Try to find the match in each table
+      const { data: leagueMatch, error: leagueError } = await supabase
+        .from('matches_league')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (leagueMatch) {
+        setMatchType('league');
+        setEditionId(leagueMatch.edition_id);
+        fetchMatchData(id, 'league', leagueMatch.edition_id);
+        return;
+      }
+
+      const { data: cupMatch, error: cupError } = await supabase
+        .from('matches_cup')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (cupMatch) {
+        setMatchType('cup');
+        setEditionId(cupMatch.edition_id);
+        fetchMatchData(id, 'cup', cupMatch.edition_id);
+        return;
+      }
+
+      const { data: championsMatch, error: championsError } = await supabase
+        .from('matches_champions')
+        .select('id, edition_id')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (championsMatch) {
+        setMatchType('champions');
+        setEditionId(championsMatch.edition_id);
+        fetchMatchData(id, 'champions', championsMatch.edition_id);
+        return;
+      }
+
+      // If we get here, the match wasn't found in any table
+      toast.error('Match not found');
+      navigate('/admin');
+    } catch (error) {
+      console.error('Error determining match type:', error);
+      toast.error('Error loading match data');
+      navigate('/admin');
+    }
+  };
+
+  const fetchMatchData = async (id: string, type: 'league' | 'cup' | 'champions', editionId: string) => {
+    try {
+      const matchTable = `matches_${type}`;
+      
+      // First get the match details
+      const { data: matchData, error: matchError } = await supabase
+        .from(matchTable)
         .select(`
           id,
-          home_team:teams!home_team_id(name),
-          away_team:teams!away_team_id(name),
+          edition_id,
+          home_team_id,
+          away_team_id,
+          home_score,
+          away_score,
           scheduled_for,
           match_day,
           approved,
-          match_results!inner (
-            id,
-            team_id,
-            teams (
-              name
-            ),
-            home_score,
-            away_score,
-            status,
-            created_at
-          ),
-          match_lineups (
-            id,
-            team_id,
-            formation,
-            player_positions
-          ),
-          match_proofs (
-            id,
-            team_id,
-            player_list_url,
-            result_url,
-            stats_url,
-            stream_url
-          ),
-          match_player_stats (
-            id,
-            player_id,
-            team_id,
-            goals,
-            assists,
-            player:profiles!match_player_stats_player_profiles_fkey (
-              username,
-              game_id
-            )
-          )
+          ${type === 'cup' ? 'round, leg, bracket_position,' : ''}
+          ${type === 'champions' ? 'stage, group_name,' : ''}
+          status
         `)
         .eq('id', id)
         .single();
 
-      if (error) throw error;
+      if (matchError) throw matchError;
+
+      // Get team names
+      const { data: homeTeam, error: homeTeamError } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', matchData.home_team_id)
+        .single();
+
+      if (homeTeamError) throw homeTeamError;
+
+      const { data: awayTeam, error: awayTeamError } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', matchData.away_team_id)
+        .single();
+
+      if (awayTeamError) throw awayTeamError;
+
+      // Get match results
+      const { data: resultsData, error: resultsError } = await supabase
+        .from('match_results')
+        .select(`
+          id,
+          team_id,
+          home_score,
+          away_score,
+          status,
+          created_at,
+          teams:team_id(name)
+        `)
+        .eq('match_id', id);
+
+      if (resultsError) throw resultsError;
+
+      // Get match lineups
+      const { data: lineupsData, error: lineupsError } = await supabase
+        .from('match_lineups')
+        .select(`
+          id,
+          team_id,
+          formation,
+          player_positions
+        `)
+        .eq('match_id', id);
+
+      if (lineupsError) throw lineupsError;
+
+      // Get match proofs
+      const { data: proofsData, error: proofsError } = await supabase
+        .from('match_proofs')
+        .select(`
+          id,
+          team_id,
+          player_list_url,
+          result_url,
+          stats_url,
+          stream_url
+        `)
+        .eq('match_id', id);
+
+      if (proofsError) throw proofsError;
+
+      // Get player stats
+      const { data: statsData, error: statsError } = await supabase
+        .from('match_player_stats')
+        .select(`
+          id,
+          player_id,
+          team_id,
+          goals,
+          assists,
+          player:profiles!match_player_stats_player_profiles_fkey(
+            username,
+            game_id
+          )
+        `)
+        .eq('match_id', id);
+
+      if (statsError) throw statsError;
+
+      // Combine all data
+      const fullMatchData = {
+        ...matchData,
+        home_team: { name: homeTeam.name },
+        away_team: { name: awayTeam.name },
+        match_results: resultsData || [],
+        match_lineups: lineupsData || [],
+        match_proofs: proofsData || [],
+        match_player_stats: statsData || []
+      };
 
       // Fetch player names for lineup positions
-      if (data?.match_lineups) {
+      if (fullMatchData.match_lineups) {
         const playerIds = new Set<string>();
-        data.match_lineups.forEach((lineup: any) => {
+        fullMatchData.match_lineups.forEach((lineup: any) => {
           Object.values(lineup.player_positions || {}).forEach((playerId: any) => {
             if (playerId) playerIds.add(playerId);
           });
@@ -128,7 +248,15 @@ export default function VerificationGame() {
         }
       }
 
-      setMatch(data);
+      if (fullMatchData.match_player_stats) {
+        const statsMap: { [key: string]: { goals: number; assists: number } } = {};
+        fullMatchData.match_player_stats.forEach((s: any) => {
+          statsMap[s.id] = { goals: s.goals, assists: s.assists };
+        });
+        setEditedStats(statsMap);
+      }
+      
+      setMatch(fullMatchData);
     } catch (error) {
       console.error('Error fetching match data:', error);
       toast.error('Error loading match data');
@@ -138,7 +266,7 @@ export default function VerificationGame() {
   };
 
   const handleApprove = async () => {
-    if (!match) return;
+    if (!match || !editionId || !matchType) return;
 
     try {
       setIsLoading(true);
@@ -170,17 +298,25 @@ export default function VerificationGame() {
         if (approveError) throw approveError;
       }
 
-      // Update match status directly
-      const { error: matchError } = await supabase
-        .from('matches')
-        .update({
-          status: 'completed',
-          approved: true,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', match.id);
+      // Update player stats if edited
+      for (const statId of Object.keys(editedStats)) {
+        const { goals, assists } = editedStats[statId];
+        await supabase
+          .from('match_player_stats')
+          .update({ goals, assists })
+          .eq('id', statId);
+      }
 
-      if (matchError) throw matchError;
+      // Call the approve_match_result function to update the match and standings
+      const { error: approveMatchError } = await supabase
+        .rpc('approve_match_result', {
+          p_match_id: match.id,
+          p_edition_type: matchType,
+          p_home_score: editedScores?.homeScore || match.match_results[0].home_score,
+          p_away_score: editedScores?.awayScore || match.match_results[0].away_score
+        });
+
+      if (approveMatchError) throw approveMatchError;
 
       toast.success('Match result approved successfully');
       navigate('/admin');
@@ -494,13 +630,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === homeTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }
@@ -524,13 +685,38 @@ export default function VerificationGame() {
                     {match.match_player_stats
                       ?.filter((stat: any) => stat.team_id === awayTeamData?.team_id)
                       .map((stat: any) => (
-                        <div key={stat.id} className="flex justify-between items-center">
-                          <span>{stat.player.username}</span>
-                          <div className="text-sm text-gray-400">
-                            {stat.goals > 0 && <span>{stat.goals} gol</span>}
-                            {stat.goals > 0 && stat.assists > 0 && <span>, </span>}
-                            {stat.assists > 0 && <span>{stat.assists} assist</span>}
-                          </div>
+                        <div key={stat.id} className="flex items-center space-x-2">
+                          <span className="flex-1">{stat.player.username}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.goals ?? stat.goals}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: parseInt(e.target.value) || 0,
+                                  assists: prev[stat.id]?.assists ?? stat.assists,
+                                },
+                              }))
+                            }
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-12 bg-gray-600 rounded px-1 text-center"
+                            value={editedStats[stat.id]?.assists ?? stat.assists}
+                            onChange={e =>
+                              setEditedStats(prev => ({
+                                ...prev,
+                                [stat.id]: {
+                                  goals: prev[stat.id]?.goals ?? stat.goals,
+                                  assists: parseInt(e.target.value) || 0,
+                                },
+                              }))
+                            }
+                          />
                         </div>
                       ))
                     }

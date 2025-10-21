@@ -7,11 +7,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import MatchResultForm from './MatchResultForm';
 import { useAuth } from '../hooks/useAuth';
 
-type Competition = {
+type Edition = {
   id: string;
   name: string;
-  image_url: string;
-  status: 'in_corso' | 'completata' | 'in_arrivo';
+  type: 'league' | 'champions' | 'cup';
+  status: 'active' | 'completed' | 'upcoming';
 };
 
 type Team = {
@@ -50,24 +50,24 @@ export default function Competitions() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [view, setView] = useState<'grid' | 'detail'>('grid');
-  const [competitions, setCompetitions] = useState<Competition[]>([]);
+  const [editions, setEditions] = useState<Edition[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetchCompetitions();
+    fetchEditions();
   }, []);
 
-  const fetchCompetitions = async () => {
+  const fetchEditions = async () => {
     try {
       const { data, error } = await supabase
-        .from('competitions')
+        .from('editions')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setCompetitions(data || []);
+      setEditions(data || []);
     } catch (error) {
-      console.error('Error fetching competitions:', error);
+      console.error('Error fetching editions:', error);
     } finally {
       setIsLoading(false);
     }
@@ -90,7 +90,7 @@ export default function Competitions() {
         </p>
       </div>
 
-      {competitions.length === 0 ? (
+      {editions.length === 0 ? (
         <div className="text-center text-gray-400">
           <p>Nessuna competizione disponibile al momento.</p>
         </div>
@@ -99,10 +99,10 @@ export default function Competitions() {
           <div className="mb-8">
             <h2 className="text-xl font-semibold text-gray-300">In Corso</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mt-4">
-              {competitions.map((competition) => (
+              {editions.map((edition) => (
                 <div
-                  key={competition.id}
-                  onClick={() => navigate(`/competitions/${competition.id}`)}
+                  key={edition.id}
+                  onClick={() => navigate(`/competitions/${edition.id}`)}
                   className="bg-gray-800 rounded-lg p-6 cursor-pointer hover:bg-gray-750 transition-colors"
                 >
                   <div className="flex items-center space-x-4">
@@ -110,10 +110,15 @@ export default function Competitions() {
                       <Shield size={32} className="text-red-500" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-lg">{competition.name}</h3>
+                      <h3 className="font-semibold text-lg">{edition.name}</h3>
                       <p className="text-sm text-gray-400">
-                        {competition.status === 'in_corso' ? 'In Corso' : 
-                         competition.status === 'completata' ? 'Completata' : 
+                        {edition.type === 'league' ? 'Campionato' : 
+                         edition.type === 'champions' ? 'Champions League' : 
+                         'Coppa'}
+                      </p>
+                      <p className="text-sm text-gray-400">
+                        {edition.status === 'active' ? 'In Corso' : 
+                         edition.status === 'completed' ? 'Completata' : 
                          'In Arrivo'}
                       </p>
                     </div>
